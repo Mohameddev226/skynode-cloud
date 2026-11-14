@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import * as React from 'react';
+import { useRouter } from 'next/navigation';
+import { Plus, Folder, Rocket, Search } from 'lucide-react';
 import Link from 'next/link';
-import { Plus, Folder, Rocket } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Card,
   CardContent,
@@ -16,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { LoadingSkeleton } from '@/components/shared/loading-skeleton';
 import { ErrorState } from '@/components/shared/error-state';
+import { CreateProjectModal } from '@/components/projects/create-project-modal';
 import api from '@/lib/api';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -29,9 +32,12 @@ interface Project {
 }
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const [projects, setProjects] = React.useState<Project[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+  const [search, setSearch] = React.useState('');
+  const [createOpen, setCreateOpen] = React.useState(false);
 
   async function fetchProjects() {
     setLoading(true);
@@ -49,9 +55,15 @@ export default function ProjectsPage() {
     setLoading(false);
   }
 
-  useEffect(() => {
+  React.useEffect(() => {
     fetchProjects();
   }, []);
+
+  const filtered = projects.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.slug.toLowerCase().includes(search.toLowerCase())
+  );
 
   if (loading) {
     return (
@@ -73,7 +85,7 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -82,11 +94,24 @@ export default function ProjectsPage() {
             Create and manage your cloud projects
           </p>
         </div>
-        <Button>
+        <Button onClick={() => setCreateOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           New Project
         </Button>
       </div>
+
+      {/* Search (only show if there are projects) */}
+      {projects.length > 0 && (
+        <div className="relative max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search projects..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+      )}
 
       {/* Project list or empty state */}
       {projects.length === 0 ? (
@@ -95,20 +120,28 @@ export default function ProjectsPage() {
           title="No projects yet"
           description="Get started by creating your first project to deploy applications."
           actionLabel="Create Project"
-          onAction={() => {}}
+          onAction={() => setCreateOpen(true)}
         />
+      ) : filtered.length === 0 ? (
+        <div className="py-12 text-center">
+          <p className="text-sm text-muted-foreground">
+            No projects match &quot;{search}&quot;
+          </p>
+        </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
+          {filtered.map((project) => (
             <Link key={project.id} href={`/projects/${project.slug}`}>
-              <Card className="group cursor-pointer transition-shadow hover:shadow-card-hover">
+              <Card className="group cursor-pointer transition-all hover:shadow-card-hover hover:border-primary/30 h-full">
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2">
                       <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
                         <Rocket className="h-4 w-4" />
                       </div>
-                      <CardTitle className="text-base">{project.name}</CardTitle>
+                      <CardTitle className="text-base group-hover:text-primary transition-colors">
+                        {project.name}
+                      </CardTitle>
                     </div>
                     <Badge
                       variant={
@@ -138,6 +171,16 @@ export default function ProjectsPage() {
           ))}
         </div>
       )}
+
+      {/* Create project modal */}
+      <CreateProjectModal
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSuccess={(project) => {
+          router.push(`/projects/${project.slug}`);
+          fetchProjects();
+        }}
+      />
     </div>
   );
 }
