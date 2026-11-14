@@ -136,6 +136,54 @@ export default function ProjectOverviewPage() {
         </div>
       </div>
 
+      {/* Quick stats / Infrastructure Overview */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 text-blue-500">
+              <Database className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Database</p>
+              <p className="text-sm font-semibold truncate max-w-[140px]">{project.databaseName ?? 'Provisioned'}</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10 text-green-500">
+              <Shield className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Auth Engine</p>
+              <p className="text-sm font-semibold">Enabled</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500">
+              <HardDrive className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Storage</p>
+              <p className="text-sm font-semibold">S3 / MinIO Active</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 text-purple-500">
+              <Zap className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Region</p>
+              <p className="text-sm font-semibold capitalize">{project.region ?? 'Default (Local)'}</p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
       {/* Service cards */}
       <div>
         <h2 className="mb-3 text-sm font-medium text-muted-foreground uppercase tracking-wider">Services</h2>

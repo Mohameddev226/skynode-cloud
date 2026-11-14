@@ -11,6 +11,16 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // ── Validate required environment variables ──────────────────
+  const required = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'ENCRYPTION_KEY'];
+  const missing = required.filter((k) => !process.env[k]);
+  if (missing.length > 0) {
+    logger.error(`Missing required environment variables: ${missing.join(', ')}`);
+    logger.error('Set them in .env or your deployment config before starting.');
+    process.exit(1);
+  }
+
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'error', 'warn', 'debug', 'verbose'],
   });

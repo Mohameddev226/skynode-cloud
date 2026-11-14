@@ -16,6 +16,7 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { AppAuthService } from './app-auth.service';
 import {
@@ -34,6 +35,7 @@ export class AppAuthController {
   constructor(private readonly appAuthService: AppAuthService) {}
 
   @Post('register')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async register(
     @Param('ref') ref: string,
     @Body() dto: AppRegisterDto,
@@ -42,6 +44,7 @@ export class AppAuthController {
   }
 
   @Post('login')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   async login(@Param('ref') ref: string, @Body() dto: AppLoginDto) {
     return this.appAuthService.login(ref, dto.email, dto.password);

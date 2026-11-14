@@ -18,7 +18,8 @@ interface ApiKey {
   id: string;
   name: string;
   keyPrefix: string;
-  permissions: string[];
+  type?: string;
+  permissions?: string[];
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -188,7 +189,12 @@ export default function ApiPage() {
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="flex gap-1 flex-wrap justify-end">
-                          {key.permissions.map((p) => (
+                          {key.type && (
+                            <Badge variant={key.type === 'SECRET' ? 'destructive' : 'secondary'} className="text-xs">
+                              {key.type}
+                            </Badge>
+                          )}
+                          {key.permissions?.map((p) => (
                             <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
                           ))}
                         </div>
