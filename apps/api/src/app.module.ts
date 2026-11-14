@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { ProjectsModule } from './projects/projects.module';
 import { DatabaseStudioModule } from './database-studio/database-studio.module';
+import { AppAuthModule } from './app-auth/app-auth.module';
 import { AuditModule } from './audit/audit.module';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
@@ -51,6 +52,7 @@ import minioConfig from './config/minio.config';
     AuthModule,
     ProjectsModule,
     DatabaseStudioModule,
+    AppAuthModule,
     AuditModule,
   ],
   providers: [
