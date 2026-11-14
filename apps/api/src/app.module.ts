@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
+import { MailModule } from './mail/mail.module';
 import { AuthModule } from './auth/auth.module';
 import { ProjectsModule } from './projects/projects.module';
 import { DatabaseStudioModule } from './database-studio/database-studio.module';
@@ -49,6 +50,7 @@ import minioConfig from './config/minio.config';
     RedisModule,
 
     // ── Feature modules ──────────────────────────────────────
+    MailModule,
     HealthModule,
     AuthModule,
     ProjectsModule,
