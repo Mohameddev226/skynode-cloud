@@ -1,18 +1,13 @@
 import { Module } from '@nestjs/common';
+import { ProjectsController } from './projects.controller';
+import { ProjectsService } from './projects.service';
+import { DatabaseProvisionerService } from './provisioning/database-provisioner.service';
+import { AuthModule } from '../auth/auth.module';
 
-/**
- * ProjectsModule — CRUD operations on tenant projects.
- *
- * Placeholder for Phase 4 implementation. Will include:
- * - Create / list / get / update / delete projects
- * - Automatic PostgreSQL database provisioning per project
- * - Project status lifecycle management
- * - API key generation and validation
- * - Region selection
- */
 @Module({
-  controllers: [],
-  providers: [],
-  exports: [],
+  imports: [AuthModule],
+  controllers: [ProjectsController],
+  providers: [ProjectsService, DatabaseProvisionerService],
+  exports: [ProjectsService, DatabaseProvisionerService],
 })
 export class ProjectsModule {}

@@ -1,0 +1,212 @@
+import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Client, Pool } from 'pg';
+import { randomBytes } from 'crypto';
+
+export interface ProvisionResult {
+  ref: string;
+  dbHost: string;
+  dbPort: number;
+  dbName: string;
+  dbUser: string;
+  dbPasswordPlain: string;
+}
+
+@Injectable()
+export class DatabaseProvisionerService {
+  private readonly logger = new Logger(DatabaseProvisionerService.name);
+  private provisionerPool: Pool;
+
+  constructor(private readonly config: ConfigService) {
+    const defaultUrl = 'postgresql://skynode:skynode@localhost:5432/postgres';
+    const connectionString =
+      this.config.get<string>('PROVISIONER_DATABASE_URL') ||
+      this.config.get<string>('DATABASE_URL') ||
+      defaultUrl;
+
+    // Connect to maintenance DB
+    this.provisionerPool = new Pool({
+      connectionString,
+      max: 5,
+      idleTimeoutMillis: 10000,
+    });
+  }
+
+  /**
+   * Generates a 12-character unique project reference string.
+   * Format: 'p' followed by 11 lowercase alphanumeric characters.
+   */
+  generateProjectRef(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const bytes = randomBytes(11);
+    let ref = 'p';
+    for (let i = 0; i < 11; i++) {
+      const byte = bytes[i] ?? 0;
+      ref += chars[byte % chars.length];
+    }
+    return ref;
+  }
+
+  /**
+   * Generates a secure random database password.
+   */
+  generateSecurePassword(length = 32): string {
+    return randomBytes(length).toString('base64url').slice(0, length);
+  }
+
+  /**
+   * Provisions a dedicated PostgreSQL database, schemas, and isolated roles.
+   */
+  async provision(ref: string): Promise<ProvisionResult> {
+    const dbName = `skynode_proj_${ref}`;
+    const adminRole = `proj_${ref}_admin`;
+    const authRole = `proj_${ref}_authenticated`;
+    const anonRole = `proj_${ref}_anon`;
+    const password = this.generateSecurePassword();
+
+    const host = this.config.get<string>('DB_HOST', 'localhost');
+    const port = parseInt(this.config.get<string>('DB_PORT', '5432'), 10);
+
+    this.logger.log(`Provisioning database ${dbName} for project ref: ${ref}`);
+
+    let client;
+    try {
+      client = await this.provisionerPool.connect();
+
+      // 1. Create dedicated database
+      // PostgreSQL doesn't allow parameters in CREATE DATABASE, validate safe alphanumeric
+      if (!/^[a-z0-9_]+$/.test(dbName)) {
+        throw new InternalServerErrorException('Invalid database name format');
+      }
+
+      await client.query(`CREATE DATABASE "${dbName}"`);
+      this.logger.log(`Created database: ${dbName}`);
+    } catch (err: any) {
+      this.logger.error(`Failed to create database ${dbName}: ${err.message}`);
+      throw new InternalServerErrorException(`Database provisioning failed: ${err.message}`);
+    } finally {
+      if (client) client.release();
+    }
+
+    // 2. Connect to the newly created database and initialize schemas and roles
+    let projectDbClient: Client | null = null;
+    try {
+      const baseUrl =
+        this.config.get<string>('PROVISIONER_DATABASE_URL') ||
+        this.config.get<string>('DATABASE_URL') ||
+        'postgresql://skynode:skynode@localhost:5432/postgres';
+
+      // Replace target database name in connection string
+      const projectConnUrl = baseUrl.replace(/\/[^/?]+(\?|$)/, `/${dbName}$1`);
+
+      projectDbClient = new Client({ connectionString: projectConnUrl });
+      await projectDbClient.connect();
+
+      // Enable extensions if allowed
+      try {
+        await projectDbClient.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
+        await projectDbClient.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+      } catch (extErr: any) {
+        this.logger.warn(`Could not enable extensions in ${dbName}: ${extErr.message}`);
+      }
+
+      // Create isolated schemas
+      await projectDbClient.query(`CREATE SCHEMA IF NOT EXISTS "public";`);
+      await projectDbClient.query(`CREATE SCHEMA IF NOT EXISTS "auth";`);
+      await projectDbClient.query(`CREATE SCHEMA IF NOT EXISTS "storage";`);
+
+      // Create isolated roles
+      // Safe sanitization for role names
+      await projectDbClient.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${adminRole}') THEN
+            CREATE ROLE "${adminRole}" WITH LOGIN PASSWORD '${password}';
+          END IF;
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${authRole}') THEN
+            CREATE ROLE "${authRole}" NOLOGIN;
+          END IF;
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${anonRole}') THEN
+            CREATE ROLE "${anonRole}" NOLOGIN;
+          END IF;
+        END
+        $$;
+      `);
+
+      // Grant permissions to admin role
+      await projectDbClient.query(`
+        GRANT ALL PRIVILEGES ON SCHEMA public, auth, storage TO "${adminRole}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public, auth, storage GRANT ALL ON TABLES TO "${adminRole}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public, auth, storage GRANT ALL ON SEQUENCES TO "${adminRole}";
+      `);
+
+      // Grant permissions to authenticated & anon roles
+      await projectDbClient.query(`
+        GRANT USAGE ON SCHEMA public TO "${authRole}", "${anonRole}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${authRole}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "${anonRole}";
+      `);
+
+      this.logger.log(`Initialized schemas & roles for project ${ref}`);
+    } catch (err: any) {
+      this.logger.error(`Error configuring project database ${dbName}: ${err.message}`);
+      // Teardown created DB on error
+      await this.teardown(ref).catch((tdErr) =>
+        this.logger.error(`Teardown after failure error: ${tdErr.message}`),
+      );
+      throw new InternalServerErrorException(`Database initialization failed: ${err.message}`);
+    } finally {
+      if (projectDbClient) {
+        await projectDbClient.end();
+      }
+    }
+
+    return {
+      ref,
+      dbHost: host,
+      dbPort: port,
+      dbName,
+      dbUser: adminRole,
+      dbPasswordPlain: password,
+    };
+  }
+
+  /**
+   * Tears down a project database and its dedicated roles.
+   */
+  async teardown(ref: string): Promise<void> {
+    const dbName = `skynode_proj_${ref}`;
+    const adminRole = `proj_${ref}_admin`;
+    const authRole = `proj_${ref}_authenticated`;
+    const anonRole = `proj_${ref}_anon`;
+
+    this.logger.log(`Tearing down database ${dbName} and roles`);
+
+    let client;
+    try {
+      client = await this.provisionerPool.connect();
+
+      // Terminate any active connections to the project database
+      await client.query(`
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid();
+      `, [dbName]);
+
+      // Drop database
+      await client.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+
+      // Drop roles
+      await client.query(`DROP ROLE IF EXISTS "${adminRole}"`);
+      await client.query(`DROP ROLE IF EXISTS "${authRole}"`);
+      await client.query(`DROP ROLE IF EXISTS "${anonRole}"`);
+
+      this.logger.log(`Successfully torn down database and roles for project ${ref}`);
+    } catch (err: any) {
+      this.logger.error(`Failed to teardown database ${dbName}: ${err.message}`);
+      throw new InternalServerErrorException(`Failed to delete database: ${err.message}`);
+    } finally {
+      if (client) client.release();
+    }
+  }
+}
