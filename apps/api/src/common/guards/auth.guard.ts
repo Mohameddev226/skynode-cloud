@@ -6,35 +6,35 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { AuthService } from '../../auth/auth.service';
 
-/**
- * Session-based authentication guard.
- * Checks that the incoming request has a valid session with an attached user.
- *
- * Apply to controllers / routes that require an authenticated user:
- *   @UseGuards(AuthGuard)
- */
+const COOKIE_NAME = 'skynode_session';
+
 @Injectable()
 export class AuthGuard implements CanActivate {
   private readonly logger = new Logger(AuthGuard.name);
 
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<Request>();
-    const session = request.session as Record<string, any>;
+  constructor(private readonly authService: AuthService) {}
 
-    if (!session?.userId) {
-      this.logger.warn(
-        `Unauthenticated request to ${request.method} ${request.url} from ${request.ip}`,
-      );
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<Request>();
+    const token = request.cookies?.[COOKIE_NAME];
+
+    if (!token) {
       throw new UnauthorizedException('Authentication required. Please log in.');
     }
 
-    // Check session expiry
-    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-      this.logger.warn(`Expired session for userId=${session.userId}`);
-      request.session.destroy(() => {});
+    const session = await this.authService.validateSession(token);
+
+    if (!session) {
+      this.logger.warn(
+        `Invalid/expired session for ${request.method} ${request.url} from ${request.ip}`,
+      );
       throw new UnauthorizedException('Session expired. Please log in again.');
     }
+
+    // Attach user data to request for @CurrentUser() decorator
+    (request as any).user = session;
 
     return true;
   }

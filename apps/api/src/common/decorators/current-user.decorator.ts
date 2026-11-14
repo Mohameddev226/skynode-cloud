@@ -2,7 +2,8 @@ import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { Request } from 'express';
 
 /**
- * Custom parameter decorator that extracts the current user from the session.
+ * Extracts the authenticated user from the request.
+ * Set by AuthGuard after validating the session cookie.
  *
  * Usage:
  *   @Get('profile')
@@ -14,23 +15,16 @@ import { Request } from 'express';
 export const CurrentUser = createParamDecorator(
   (field: string | undefined, ctx: ExecutionContext) => {
     const request = ctx.switchToHttp().getRequest<Request>();
-    const session = request.session as Record<string, any>;
+    const user = (request as any).user;
 
-    const user = {
-      userId: session?.userId,
-      email: session?.email,
-      role: session?.role,
-      name: session?.name,
-    };
-
+    if (!user) return null;
     return field ? user[field as keyof typeof user] : user;
   },
 );
 
-/** Type-safe shape returned by @CurrentUser() when no field is specified. */
+/** Type-safe shape returned by @CurrentUser(). */
 export interface SessionUser {
   userId: string;
   email: string;
   role: string;
-  name: string;
 }

@@ -1,19 +1,10 @@
 import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
 
-/**
- * AuthModule — handles user authentication and session management.
- *
- * Placeholder for Phase 3 implementation. Will include:
- * - Local email/password registration & login
- * - Session creation with express-session + connect-redis
- * - CSRF protection via csurf
- * - Password hashing with argon2
- * - MFA (TOTP) support
- * - Password reset flow
- */
 @Module({
-  controllers: [],
-  providers: [],
-  exports: [],
+  controllers: [AuthController],
+  providers: [AuthService],
+  exports: [AuthService],
 })
 export class AuthModule {}
