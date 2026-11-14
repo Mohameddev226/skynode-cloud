@@ -17,7 +17,14 @@ import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth } from '@nestjs/swagg
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { RegisterDto, LoginDto, ForgotPasswordDto, UpdateProfileDto, ChangePasswordDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+  UpdateProfileDto,
+  ChangePasswordDto,
+} from './dto';
 import { AuthGuard } from '../common/guards/auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -96,6 +103,26 @@ export class AuthController {
     return { data: { message: 'Logged out successfully' } };
   }
 
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ short: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Request password reset email' })
+  @ApiResponse({ status: 200, description: 'Reset email triggered' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    const result = await this.authService.forgotPassword(dto.email);
+    return { data: result };
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ short: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Reset password using token' })
+  @ApiResponse({ status: 200, description: 'Password reset successfully' })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    const result = await this.authService.resetPassword(dto.token, dto.newPassword);
+    return { data: result };
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Get current user profile' })
@@ -130,17 +157,6 @@ export class AuthController {
   ) {
     const result = await this.authService.changePassword(user.userId, dto);
     return { data: result };
-  }
-
-  @Post('forgot-password')
-  @HttpCode(HttpStatus.OK)
-  @Throttle({ short: { ttl: 60000, limit: 3 } })
-  @ApiOperation({ summary: 'Request password reset email' })
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    // Always return success to prevent email enumeration
-    // TODO: Phase 7 — Send email via NotificationsModule
-    this.logger.log(`Password reset requested for: ${dto.email}`);
-    return { data: { message: 'If an account exists, a reset link has been sent.' } };
   }
 
   @Get('sessions')

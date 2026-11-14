@@ -2,7 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { MailService } from '../mail/mail.service';
+import { ConflictException, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
 describe('AuthService', () => {
@@ -30,6 +31,11 @@ describe('AuthService', () => {
     del: jest.fn(),
   };
 
+  const mockMail = {
+    sendVerificationEmail: jest.fn().mockResolvedValue(undefined),
+    sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -38,6 +44,7 @@ describe('AuthService', () => {
         AuthService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: REDIS_CLIENT, useValue: mockRedis },
+        { provide: MailService, useValue: mockMail },
       ],
     }).compile();
 
@@ -151,6 +158,47 @@ describe('AuthService', () => {
         expiresAt: future,
       });
       expect(mockPrisma.session.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('should return confirmation message and trigger email if user exists', async () => {
+      mockPrisma.platformUser.findUnique.mockResolvedValue({ id: 'u1', email: 'test@skynode.cloud' });
+      mockRedis.setex.mockResolvedValue('OK');
+
+      const res = await service.forgotPassword('test@skynode.cloud');
+      expect(res.message).toContain('password reset link has been sent');
+      expect(mockRedis.setex).toHaveBeenCalled();
+      expect(mockMail.sendPasswordResetEmail).toHaveBeenCalled();
+    });
+
+    it('should return confirmation message without throwing if user does not exist', async () => {
+      mockPrisma.platformUser.findUnique.mockResolvedValue(null);
+
+      const res = await service.forgotPassword('unknown@skynode.cloud');
+      expect(res.message).toContain('password reset link has been sent');
+      expect(mockRedis.setex).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('should throw BadRequestException if token is invalid or expired', async () => {
+      mockRedis.get.mockResolvedValue(null);
+
+      await expect(service.resetPassword('bad-token', 'NewPassword123!')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should update password and delete token on success', async () => {
+      mockRedis.get.mockResolvedValue('u1');
+      mockPrisma.platformUser.update.mockResolvedValue({ id: 'u1' });
+      mockRedis.del.mockResolvedValue(1);
+
+      const res = await service.resetPassword('valid-token', 'NewPassword123!');
+      expect(res.message).toBe('Password reset successfully');
+      expect(mockPrisma.platformUser.update).toHaveBeenCalled();
+      expect(mockRedis.del).toHaveBeenCalled();
     });
   });
 });

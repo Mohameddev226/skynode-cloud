@@ -56,7 +56,7 @@ export async function apiRequest<T = any>(
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    const json = await res.json().catch(() => null);
+    const json: any = await res.json().catch(() => null);
 
     if (!res.ok) {
       return {

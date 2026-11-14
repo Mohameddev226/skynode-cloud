@@ -27,7 +27,7 @@ SkyNode Cloud
 ### Prerequisites
 
 - **Node.js** >= 20.0.0
-- **pnpm** >= 9.0.0
+- **npm** >= 10.0.0
 - **Docker Desktop** (for PostgreSQL, Redis, MinIO)
 
 ### Setup
@@ -40,41 +40,65 @@ cd skynode-cloud
 # Copy environment variables
 cp .env.example .env
 
-# Start infrastructure services
+# Start infrastructure services (Postgres, Redis, MinIO)
 docker compose up -d
 
-# Install dependencies
-pnpm install
+# Install dependencies (npm workspaces)
+npm install
 
 # Generate Prisma client
-pnpm db:generate
+npm run db:generate
 
-# Push schema to database
-pnpm db:push
+# Push schema to control database
+npm run db:push
 
-# Start development
-pnpm dev
+# (Optional) Seed demo user
+npx ts-node apps/api/scripts/seed.ts
+
+# Start development servers
+npm run dev
+```
+
+### SkyNode CLI
+
+```bash
+# Check platform status
+npx skynode status
+
+# Authenticate
+npx skynode login -e admin@skynode.dev
+
+# List projects
+npx skynode projects list
+
+# Create a project
+npx skynode projects create "My New App"
+
+# Inspect database & run SQL
+npx skynode db tables <project-ref>
+npx skynode db sql <project-ref> "SELECT * FROM users"
 ```
 
 ### Services
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| Dashboard | http://localhost:3000 | Next.js management UI |
+| Dashboard | http://localhost:3000 | Next.js 15 management UI |
 | API | http://localhost:4000 | NestJS backend API |
-| API Docs | http://localhost:4000/api/docs | Swagger documentation |
-| MinIO Console | http://localhost:9001 | Object storage UI |
+| API Docs | http://localhost:4000/api/docs | Swagger OpenAPI documentation |
+| Health Check | http://localhost:4000/api/v1/health | System & services health |
+| MinIO Console | http://localhost:9001 | S3-compatible Object Storage UI |
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS |
-| Backend | NestJS 11, TypeScript, Prisma |
-| Database | PostgreSQL 16 |
-| Cache | Redis 7 |
-| Storage | MinIO |
-| Tooling | pnpm, Turborepo, Docker |
+| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Radix UI |
+| Backend | NestJS 11, TypeScript, Prisma, Argon2id, AES-256-GCM |
+| Database | PostgreSQL 16 (Multi-tenant provisioned databases) |
+| Cache & Sessions | Redis 7 |
+| Storage | MinIO / AWS S3 SDK |
+| Tooling | npm workspaces, Turborepo, Docker, Jest, Nginx |
 
 ## Project Structure
 

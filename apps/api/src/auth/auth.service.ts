@@ -6,11 +6,13 @@ import {
   BadRequestException,
   Logger,
   Inject,
+  Optional,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
+import { MailService } from '../mail/mail.service';
 import type Redis from 'ioredis';
 import {
   RegisterDto,
@@ -38,6 +40,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Optional() private readonly mailService?: MailService,
   ) {}
 
   /**
@@ -62,6 +65,14 @@ export class AuthService {
       },
       select: { id: true, email: true, name: true, role: true, createdAt: true },
     });
+
+    if (this.mailService) {
+      const verifyToken = randomBytes(32).toString('hex');
+      await this.redis.setex(`email_verify:${verifyToken}`, 86400, user.id);
+      this.mailService.sendVerificationEmail(user.email, verifyToken).catch((err) => {
+        this.logger.warn(`Failed to send verification email: ${err.message}`);
+      });
+    }
 
     this.logger.log(`User registered: ${user.email}`);
     return user;
@@ -349,5 +360,56 @@ export class AuthService {
     await this.prisma.session.delete({ where: { id: sessionId } });
 
     return { message: 'Session revoked' };
+  }
+
+  /**
+   * Request password reset token via email.
+   */
+  async forgotPassword(email: string) {
+    const user = await this.prisma.platformUser.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+
+    // Mitigate account enumeration: return success even if user not found
+    if (!user) {
+      return { message: 'If the email exists, a password reset link has been sent' };
+    }
+
+    const resetToken = randomBytes(32).toString('hex');
+    const resetKey = `pwd_reset:${resetToken}`;
+    await this.redis.setex(resetKey, 3600, user.id); // 1 hour TTL
+
+    if (this.mailService) {
+      this.mailService.sendPasswordResetEmail(user.email, resetToken).catch((err) => {
+        this.logger.warn(`Failed to send password reset email: ${err.message}`);
+      });
+    }
+
+    this.logger.log(`Password reset requested for: ${user.email}`);
+    return { message: 'If the email exists, a password reset link has been sent' };
+  }
+
+  /**
+   * Reset password using token.
+   */
+  async resetPassword(token: string, newPassword: string) {
+    const resetKey = `pwd_reset:${token}`;
+    const userId = await this.redis.get(resetKey);
+
+    if (!userId) {
+      throw new BadRequestException('Invalid or expired password reset token');
+    }
+
+    const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+
+    await this.prisma.platformUser.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    await this.redis.del(resetKey);
+    this.logger.log(`Password reset completed for user ID: ${userId}`);
+
+    return { message: 'Password reset successfully' };
   }
 }
