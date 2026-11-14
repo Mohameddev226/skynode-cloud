@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+.next/
+.turbo/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+
+# Docker volumes
+infrastructure/data/
+
+# Logs
+*.log
+
+# MinIO data
+minio-data/
+
+# Prisma
+apps/api/prisma/migrations/**/migration_lock.toml

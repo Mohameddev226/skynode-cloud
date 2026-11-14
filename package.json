@@ -1,0 +1,36 @@
+{
+  "name": "skynode-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SkyNode Cloud — Private Backend-as-a-Service Platform",
+  "author": "SkyNode",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "clean": "turbo run clean",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "npm --workspace @skynode/api run prisma generate",
+    "db:migrate": "npm --workspace @skynode/api run prisma migrate dev",
+    "db:push": "npm --workspace @skynode/api run prisma db push",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.8.0"
+  }
+}

@@ -1,0 +1,79 @@
+services:
+  # ===========================================
+  # PostgreSQL — Control Plane + Project DBs
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: skynode-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${PG_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:-postgres_dev_password}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - skynode-internal
+
+  # ===========================================
+  # Redis — Sessions, Caching, Rate Limiting
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: skynode-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD:-skynode_redis_dev_password} --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-skynode_redis_dev_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - skynode-internal
+
+  # ===========================================
+  # MinIO — Object Storage (S3-Compatible)
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: skynode-minio
+    restart: unless-stopped
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skynode_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-skynode_minio_dev_password}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - skynode-internal
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+
+networks:
+  skynode-internal:
+    driver: bridge
+    name: skynode-internal

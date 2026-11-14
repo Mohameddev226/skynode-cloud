@@ -1,0 +1,26 @@
+{
+  "name": "@skynode/cli",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "skynode": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@skynode/sdk": "*",
+    "@skynode/types": "*",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.8.0"
+  }
+}
