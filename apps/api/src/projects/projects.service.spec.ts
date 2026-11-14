@@ -9,7 +9,7 @@ import { encrypt } from '../common/utils/crypto.util';
 describe('ProjectsService', () => {
   let service: ProjectsService;
 
-  const mockPrisma = {
+  const mockPrisma: any = {
     project: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
