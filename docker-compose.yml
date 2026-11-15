@@ -48,7 +48,7 @@ services:
   # MinIO — Object Storage (S3-Compatible)
   # ===========================================
   minio:
-    image: minio/minio:latest
+    image: coollabsio/minio:latest
     container_name: skynode-minio
     restart: unless-stopped
     ports:

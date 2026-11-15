@@ -30,7 +30,7 @@ import { ProjectAppAuthGuard } from './guards/project-app-auth.guard';
 import { AppCurrentUser } from './decorators/app-current-user.decorator';
 import { AuthGuard } from '../common/guards/auth.guard';
 
-@Controller('api/v1/projects/:ref/auth')
+@Controller('projects/:ref/auth')
 export class AppAuthController {
   constructor(private readonly appAuthService: AppAuthService) {}
 

@@ -14,7 +14,7 @@ import { StorageService } from './storage.service';
 import { CreateBucketDto, UploadUrlRequestDto } from './dto/storage.dto';
 import { AuthGuard } from '../common/guards/auth.guard';
 
-@Controller('api/v1/projects/:ref/storage')
+@Controller('projects/:ref/storage')
 @UseGuards(AuthGuard)
 export class StorageController {
   constructor(private readonly storageService: StorageService) {}

@@ -139,7 +139,7 @@ enum ActorType {
 
 model AuditLog {
   id           String    @id @default(uuid()) @db.Uuid
-  actorId      String    @db.VarChar(255)
+  actorId      String    @db.Uuid
   actorType    ActorType
   action       String    @db.VarChar(100)
   resourceType String    @db.VarChar(100)

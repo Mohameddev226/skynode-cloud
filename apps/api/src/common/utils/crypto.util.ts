@@ -1,11 +1,13 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 const DEFAULT_KEY_HEX = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 function getEncryptionKey(): Buffer {
-  const hex = process.env.ENCRYPTION_KEY || DEFAULT_KEY_HEX;
-  return Buffer.from(hex, 'hex');
+  const raw = process.env.ENCRYPTION_KEY || DEFAULT_KEY_HEX;
+  const buf = Buffer.from(raw, 'hex');
+  if (buf.length === 32) return buf;
+  return createHash('sha256').update(raw).digest();
 }
 
 /**
