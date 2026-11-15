@@ -37,7 +37,12 @@ async function request<T>(
       };
     }
 
-    return { success: true, data: json?.data ?? json };
+    let payload = json?.data ?? json;
+    if (payload && typeof payload === 'object' && 'data' in payload && !Array.isArray(payload)) {
+      payload = (payload as Record<string, unknown>).data;
+    }
+
+    return { success: true, data: payload as T };
   } catch (err) {
     return {
       success: false,

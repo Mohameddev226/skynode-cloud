@@ -29,13 +29,23 @@ export class TransformInterceptor<T>
     const response = context.switchToHttp().getResponse();
 
     return next.handle().pipe(
-      map((data) => ({
-        success: true,
-        statusCode: response.statusCode,
-        data,
-        timestamp: new Date().toISOString(),
-        requestId: request.headers['x-request-id'] || undefined,
-      })),
+      map((raw: any) => {
+        const data =
+          raw !== null &&
+          typeof raw === 'object' &&
+          'data' in raw &&
+          Object.keys(raw).length === 1
+            ? raw.data
+            : raw;
+
+        return {
+          success: true,
+          statusCode: response.statusCode,
+          data,
+          timestamp: new Date().toISOString(),
+          requestId: request.headers['x-request-id'] || undefined,
+        };
+      }),
     );
   }
 }

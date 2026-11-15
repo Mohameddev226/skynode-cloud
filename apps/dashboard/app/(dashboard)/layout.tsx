@@ -30,13 +30,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   React.useEffect(() => {
     // Fetch current user
     api.get<AuthUser>('/api/v1/auth/me').then((res) => {
-      if (res.success && res.data) setUser(res.data);
-      else router.replace('/login');
+      if (res.success && res.data) {
+        const u = (res.data as any)?.data ?? res.data;
+        setUser(u);
+      } else {
+        router.replace('/login');
+      }
     });
 
     // Fetch projects for sidebar
     api.get<Project[]>('/api/v1/projects').then((res) => {
-      if (res.success && res.data) setProjects(res.data);
+      if (res.success && res.data) {
+        const list = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray((res.data as any)?.data)
+            ? (res.data as any).data
+            : [];
+        setProjects(list);
+      }
     });
   }, [router]);
 

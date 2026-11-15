@@ -61,6 +61,11 @@ const projectNavItems = [
 
 /* ─── Sidebar ────────────────────────────────────── */
 export function Sidebar({ projects = [], currentProject, onCreateProject }: SidebarProps) {
+  const safeProjects: Project[] = Array.isArray(projects)
+    ? projects
+    : Array.isArray((projects as any)?.data)
+      ? (projects as any).data
+      : [];
   const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
   const { theme, setTheme } = useTheme();
@@ -128,7 +133,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="start">
                 <DropdownMenuLabel>Projects</DropdownMenuLabel>
-                {projects.map((p) => (
+                {safeProjects.map((p: Project) => (
                   <DropdownMenuItem key={p.id} asChild>
                     <Link href={`/projects/${p.slug}`} className="cursor-pointer">
                       <div className="flex h-5 w-5 items-center justify-center rounded bg-primary/10 text-primary text-[10px] font-bold mr-2">
@@ -138,7 +143,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
                     </Link>
                   </DropdownMenuItem>
                 ))}
-                {projects.length > 0 && <DropdownMenuSeparator />}
+                {safeProjects.length > 0 && <DropdownMenuSeparator />}
                 <DropdownMenuItem onClick={onCreateProject} className="cursor-pointer">
                   <Plus className="h-4 w-4 mr-2 text-muted-foreground" />
                   New project

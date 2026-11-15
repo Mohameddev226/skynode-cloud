@@ -51,7 +51,13 @@ export default function ProjectsPage() {
       return;
     }
 
-    setProjects(res.data ?? []);
+    const list = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray((res.data as any)?.data)
+        ? (res.data as any).data
+        : [];
+
+    setProjects(list);
     setLoading(false);
   }
 
