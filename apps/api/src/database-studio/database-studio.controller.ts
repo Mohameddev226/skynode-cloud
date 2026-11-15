@@ -102,7 +102,8 @@ export class DatabaseStudioController {
     @Query() pagination: TableQueryPaginationDto,
   ) {
     const creds = await this.getCredentials(identifier, userId);
-    const result = await this.studioService.getTableRecords(creds, schema, tableName, pagination);
+    const targetSchema = pagination.schema || schema || 'public';
+    const result = await this.studioService.getTableRecords(creds, targetSchema, tableName, pagination);
     return { data: result };
   }
 

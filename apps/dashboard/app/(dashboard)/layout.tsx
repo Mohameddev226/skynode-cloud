@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { TopNav } from '@/components/layout/top-nav';
 import { CreateProjectModal } from '@/components/projects/create-project-modal';
+import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 
 interface AuthUser {
@@ -69,6 +70,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     });
   }
 
+  const isFullBleed = pathname?.includes('/database/sql') || pathname?.includes('/database');
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
@@ -80,13 +83,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopNav
           user={user ? { name: user.fullName, email: user.email, avatarUrl: user.avatarUrl } : undefined}
+          projects={projects}
+          currentProject={currentProject}
           onLogout={handleLogout}
         />
 
-        <main className="flex-1 overflow-y-auto">
-          <div className="container max-w-6xl mx-auto px-6 py-6">
-            {children}
-          </div>
+        <main className={cn('flex-1 overflow-y-auto', isFullBleed && 'overflow-hidden flex flex-col')}>
+          {isFullBleed ? (
+            children
+          ) : (
+            <div className="container max-w-6xl mx-auto px-6 py-6">
+              {children}
+            </div>
+          )}
         </main>
       </div>
 

@@ -19,6 +19,8 @@ import {
   Sun,
   Moon,
   Monitor,
+  Terminal,
+  Table2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -50,13 +52,14 @@ interface SidebarProps {
 
 /* ─── Nav items for a project ───────────────────── */
 const projectNavItems = [
-  { label: 'Overview',     icon: LayoutDashboard, href: '' },
-  { label: 'Database',     icon: Database,         href: '/database' },
-  { label: 'Auth',         icon: Shield,           href: '/auth' },
-  { label: 'Storage',      icon: HardDrive,        href: '/storage' },
-  { label: 'API',          icon: Zap,              href: '/api' },
-  { label: 'SQL Editor',   icon: Code2,            href: '/database/sql' },
-  { label: 'Settings',     icon: Settings,         href: '/settings' },
+  { label: 'Project Overview', icon: LayoutDashboard, href: '' },
+  { label: 'Table Editor',     icon: Table2,          href: '/database' },
+  { label: 'SQL Editor',       icon: Terminal,        href: '/database/sql' },
+  { label: 'Database',         icon: Database,        href: '/database' },
+  { label: 'Authentication',   icon: Shield,          href: '/auth' },
+  { label: 'Storage',          icon: HardDrive,       href: '/storage' },
+  { label: 'API Docs & Keys',  icon: Zap,             href: '/api' },
+  { label: 'Settings',         icon: Settings,        href: '/settings' },
 ];
 
 /* ─── Sidebar ────────────────────────────────────── */
@@ -93,8 +96,8 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
         {/* Logo */}
         <div className={cn('flex h-14 items-center border-b border-sidebar-border px-3', collapsed && 'justify-center')}>
           <Link href="/projects" className="flex items-center gap-2 min-w-0">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-glow">
-              <Cloud className="h-4 w-4" />
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+              <Zap className="h-4 w-4 fill-emerald-500" />
             </div>
             {!collapsed && (
               <span className="truncate text-sm font-semibold text-sidebar-foreground">

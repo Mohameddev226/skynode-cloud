@@ -12,6 +12,7 @@ import { DatabaseStudioModule } from './database-studio/database-studio.module';
 import { AppAuthModule } from './app-auth/app-auth.module';
 import { StorageModule } from './storage/storage.module';
 import { AuditModule } from './audit/audit.module';
+import { BootstrapModule } from './bootstrap/bootstrap.module';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import redisConfig from './config/redis.config';
@@ -58,6 +59,7 @@ import minioConfig from './config/minio.config';
     AppAuthModule,
     StorageModule,
     AuditModule,
+    BootstrapModule,
   ],
   providers: [
     {

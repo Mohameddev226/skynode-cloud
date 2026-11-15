@@ -57,6 +57,11 @@ export class SqlQueryDto {
 }
 
 export class TableQueryPaginationDto {
+  @ApiPropertyOptional({ default: 'public' })
+  @IsOptional()
+  @IsString()
+  schema?: string = 'public';
+
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
   @Type(() => Number)
