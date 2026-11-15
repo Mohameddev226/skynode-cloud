@@ -52,10 +52,17 @@ export class AppAuthService {
   }
 
   private async getCredentials(projectRef: string): Promise<ProjectDbCredentials> {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectRef);
+    const or: Array<{ id?: string; slug?: string; ref?: string }> = [
+      { ref: projectRef },
+      { slug: projectRef },
+    ];
+    if (isUuid) or.push({ id: projectRef });
+
     const project = await this.prisma.project.findFirst({
       where: {
         status: { not: 'DELETED' },
-        OR: [{ ref: projectRef }, { slug: projectRef }, { id: projectRef }],
+        OR: or,
       },
     });
     if (!project) throw new NotFoundException(`Project ${projectRef} not found`);

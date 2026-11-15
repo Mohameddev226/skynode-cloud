@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { TopNav } from '@/components/layout/top-nav';
 import { CreateProjectModal } from '@/components/projects/create-project-modal';
@@ -23,9 +23,14 @@ interface Project {
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [user, setUser] = React.useState<AuthUser | null>(null);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [createOpen, setCreateOpen] = React.useState(false);
+
+  const slugMatch = pathname.match(/^\/projects\/([^/]+)/);
+  const currentSlug = slugMatch && slugMatch[1] !== 'new' ? slugMatch[1] : null;
+  const currentProject = projects.find((p) => p.slug === currentSlug) ?? null;
 
   React.useEffect(() => {
     // Fetch current user
@@ -68,6 +73,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
         projects={projects}
+        currentProject={currentProject}
         onCreateProject={() => setCreateOpen(true)}
       />
 

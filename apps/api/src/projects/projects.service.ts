@@ -12,6 +12,19 @@ import { encrypt, decrypt } from '../common/utils/crypto.util';
 import { createHash, randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getProjectOrConditions(identifier: string): Array<{ id?: string; slug?: string; ref?: string }> {
+  const or: Array<{ id?: string; slug?: string; ref?: string }> = [
+    { slug: identifier },
+    { ref: identifier },
+  ];
+  if (UUID_REGEX.test(identifier)) {
+    or.push({ id: identifier });
+  }
+  return or;
+}
+
 @Injectable()
 export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
@@ -187,11 +200,7 @@ export class ProjectsService {
       where: {
         ownerId,
         status: { not: 'DELETED' },
-        OR: [
-          { id: identifier },
-          { slug: identifier },
-          { ref: identifier },
-        ],
+        OR: getProjectOrConditions(identifier),
       },
       include: {
         apiKeys: {
@@ -324,7 +333,7 @@ export class ProjectsService {
       where: {
         ownerId,
         status: { not: 'DELETED' },
-        OR: [{ id: identifier }, { slug: identifier }, { ref: identifier }],
+        OR: getProjectOrConditions(identifier),
       },
     });
 

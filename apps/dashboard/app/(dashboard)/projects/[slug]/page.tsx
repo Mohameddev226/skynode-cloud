@@ -109,7 +109,8 @@ export default function ProjectOverviewPage() {
     paused: { label: 'Paused', icon: AlertCircle, color: 'text-yellow-500' },
     archived: { label: 'Archived', icon: Clock, color: 'text-muted-foreground' },
   };
-  const status = statusConfig[project.status];
+  const normStatus = (project.status?.toLowerCase() ?? 'active') as 'active' | 'paused' | 'archived';
+  const status = statusConfig[normStatus] ?? statusConfig.active;
 
   return (
     <div className="space-y-6 animate-fade-in">

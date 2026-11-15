@@ -73,10 +73,17 @@ export class StorageService {
   }
 
   private async resolveProjectRef(identifier: string): Promise<string> {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
+    const or: Array<{ id?: string; slug?: string; ref?: string }> = [
+      { ref: identifier },
+      { slug: identifier },
+    ];
+    if (isUuid) or.push({ id: identifier });
+
     const project = await this.prisma.project.findFirst({
       where: {
         status: { not: 'DELETED' },
-        OR: [{ ref: identifier }, { slug: identifier }, { id: identifier }],
+        OR: or,
       },
       select: { ref: true },
     });
