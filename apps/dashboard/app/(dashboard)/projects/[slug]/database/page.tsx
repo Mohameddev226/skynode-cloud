@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { LoadingSkeleton } from '@/components/shared/loading-skeleton';
 import { ErrorState } from '@/components/shared/error-state';
 import { EmptyState } from '@/components/shared/empty-state';
+import { CreateTableModal } from '@/components/database/create-table-modal';
 import api from '@/lib/api';
 
 interface TableInfo {
@@ -32,6 +33,7 @@ export default function DatabasePage() {
   const [tables, setTables] = React.useState<TableInfo[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [createModalOpen, setCreateModalOpen] = React.useState(false);
 
   async function fetchTables() {
     setLoading(true);
@@ -75,7 +77,7 @@ export default function DatabasePage() {
               SQL Editor
             </Link>
           </Button>
-          <Button>
+          <Button onClick={() => setCreateModalOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             New table
           </Button>
@@ -89,7 +91,7 @@ export default function DatabasePage() {
           title="No tables yet"
           description="Create your first table to start storing data in this project's database."
           actionLabel="Create table"
-          onAction={() => {}}
+          onAction={() => setCreateModalOpen(true)}
         />
       ) : (
         <Card>
@@ -126,6 +128,13 @@ export default function DatabasePage() {
           </CardContent>
         </Card>
       )}
+
+      <CreateTableModal
+        open={createModalOpen}
+        onOpenChange={setCreateModalOpen}
+        projectSlug={slug}
+        onSuccess={fetchTables}
+      />
     </div>
   );
 }
