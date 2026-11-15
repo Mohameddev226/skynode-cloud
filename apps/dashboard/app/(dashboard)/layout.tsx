@@ -28,7 +28,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [createOpen, setCreateOpen] = React.useState(false);
 
-  const slugMatch = pathname.match(/^\/projects\/([^/]+)/);
+  const slugMatch = pathname?.match(/^\/projects\/([^/]+)/);
   const currentSlug = slugMatch && slugMatch[1] !== 'new' ? slugMatch[1] : null;
   const currentProject = projects.find((p) => p.slug === currentSlug) ?? null;
 

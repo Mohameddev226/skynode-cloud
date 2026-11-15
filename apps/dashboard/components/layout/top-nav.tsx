@@ -33,7 +33,8 @@ interface TopNavProps {
   onLogout?: () => void;
 }
 
-function buildBreadcrumbs(pathname: string): BreadcrumbSegment[] {
+function buildBreadcrumbs(pathname: string | null): BreadcrumbSegment[] {
+  if (!pathname) return [];
   const segments = pathname.split('/').filter(Boolean);
   const crumbs: BreadcrumbSegment[] = [];
 
