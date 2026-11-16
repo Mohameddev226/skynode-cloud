@@ -12,6 +12,8 @@ import {
   Globe,
   Filter,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   Shield,
   Trash2,
   Pencil,
@@ -20,13 +22,28 @@ import {
   X,
   Check,
   Columns,
+  Key,
+  FileCode,
+  Copy,
+  AlertTriangle,
+  Database,
+  Layers,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import { CreateTableModal } from '@/components/database/create-table-modal';
+import { InsertRowModal } from '@/components/database/insert-row-modal';
 
 /* ─── Types ────────────────────────────────────────────────── */
 interface TableInfo {
@@ -86,15 +103,17 @@ export default function TableEditorPage() {
   const params = useParams();
   const slug = params.slug as string;
 
-  /* sidebar */
+  /* sidebar & schemas */
   const [tables, setTables] = React.useState<TableInfo[]>([]);
   const [tablesLoading, setTablesLoading] = React.useState(true);
   const [schema, setSchema] = React.useState('public');
+  const [schemaMenuOpen, setSchemaMenuOpen] = React.useState(false);
   const [tableSearch, setTableSearch] = React.useState('');
   const [activeTable, setActiveTable] = React.useState<string | null>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [insertOpen, setInsertOpen] = React.useState(false);
 
-  /* grid */
+  /* grid & definition */
   const [columns, setColumns] = React.useState<ColumnInfo[]>([]);
   const [rows, setRows] = React.useState<Record<string, unknown>[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -106,22 +125,47 @@ export default function TableEditorPage() {
   const [filterText, setFilterText] = React.useState('');
   const [openTabs, setOpenTabs] = React.useState<string[]>([]);
 
+  /* sorting */
+  const [sortCol, setSortCol] = React.useState<string | null>(null);
+  const [sortDir, setSortDir] = React.useState<'asc' | 'desc' | null>(null);
+
+  /* row deletion */
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
+  const [deletingRows, setDeletingRows] = React.useState(false);
+
+  /* table drop */
+  const [dropTableTarget, setDropTableTarget] = React.useState<string | null>(null);
+  const [droppingTable, setDroppingTable] = React.useState(false);
+
+  /* copied state */
+  const [copiedDdl, setCopiedDdl] = React.useState(false);
+
   /* load table list */
-  async function loadTables() {
+  async function loadTables(targetSchema = schema) {
     setTablesLoading(true);
     const res = await api.get<TableInfo[]>(`/api/v1/projects/${slug}/database/tables`);
     if (res.success && res.data) {
-      const list = Array.isArray(res.data) ? res.data : (res.data as any).data ?? [];
-      setTables(list);
-      if (!activeTable && list.length > 0) {
-        setActiveTable(list[0].name);
-        setOpenTabs([list[0].name]);
+      const allTables = Array.isArray(res.data) ? res.data : (res.data as any).data ?? [];
+      const filtered = allTables.filter((t: TableInfo) => t.schema === targetSchema);
+      setTables(filtered);
+
+      // If active table is not in this schema, switch to the first table
+      if (filtered.length > 0) {
+        if (!activeTable || !filtered.some((t: TableInfo) => t.name === activeTable)) {
+          setActiveTable(filtered[0].name);
+          setOpenTabs([filtered[0].name]);
+        }
+      } else {
+        setActiveTable(null);
+        setOpenTabs([]);
       }
     }
     setTablesLoading(false);
   }
 
-  React.useEffect(() => { loadTables(); }, [slug]);
+  React.useEffect(() => {
+    loadTables(schema);
+  }, [slug, schema]);
 
   /* load grid data when table changes */
   async function loadTableData(tableName: string, pg = 1) {
@@ -150,7 +194,9 @@ export default function TableEditorPage() {
   }
 
   React.useEffect(() => {
-    if (activeTable) loadTableData(activeTable, 1);
+    if (activeTable) {
+      loadTableData(activeTable, 1);
+    }
   }, [activeTable, schema]);
 
   function openTable(name: string) {
@@ -180,6 +226,105 @@ export default function TableEditorPage() {
     });
   }
 
+  /* sort handler */
+  function handleSort(colName: string) {
+    if (sortCol === colName) {
+      if (sortDir === 'asc') setSortDir('desc');
+      else if (sortDir === 'desc') {
+        setSortCol(null);
+        setSortDir(null);
+      }
+    } else {
+      setSortCol(colName);
+      setSortDir('asc');
+    }
+  }
+
+  /* filter & sort client-side records */
+  const displayedRows = React.useMemo(() => {
+    let result = [...rows];
+    if (filterText.trim()) {
+      const q = filterText.toLowerCase();
+      result = result.filter((row) =>
+        Object.values(row).some((val) =>
+          String(val ?? '').toLowerCase().includes(q)
+        )
+      );
+    }
+    if (sortCol && sortDir) {
+      result.sort((a, b) => {
+        const valA = a[sortCol];
+        const valB = b[sortCol];
+        if (valA === valB) return 0;
+        if (valA === null || valA === undefined) return 1;
+        if (valB === null || valB === undefined) return -1;
+        if (valA < valB) return sortDir === 'asc' ? -1 : 1;
+        return sortDir === 'asc' ? 1 : -1;
+      });
+    }
+    return result;
+  }, [rows, filterText, sortCol, sortDir]);
+
+  /* delete selected rows */
+  async function handleDeleteSelectedRows() {
+    if (!activeTable || selected.size === 0) return;
+    setDeletingRows(true);
+
+    const pkCol = columns.find((c) => c.isPrimary)?.name || 'id';
+    const selectedRows = Array.from(selected).map((idx) => rows[idx]).filter(Boolean);
+
+    for (const r of selectedRows) {
+      const pkVal = (r as any)[pkCol];
+      if (pkVal !== undefined) {
+        await api.delete(
+          `/api/v1/projects/${slug}/database/tables/${activeTable}/records/${encodeURIComponent(String(pkVal))}?pk=${pkCol}&schema=${schema}`
+        );
+      }
+    }
+
+    setDeletingRows(false);
+    setDeleteConfirmOpen(false);
+    setSelected(new Set());
+    loadTableData(activeTable, page);
+  }
+
+  /* drop table */
+  async function handleDropTable() {
+    if (!dropTableTarget) return;
+    setDroppingTable(true);
+
+    await api.delete(
+      `/api/v1/projects/${slug}/database/tables/${dropTableTarget}?schema=${schema}`
+    );
+
+    setDroppingTable(false);
+    const dropped = dropTableTarget;
+    setDropTableTarget(null);
+
+    // Remove from open tabs
+    setOpenTabs((prev) => prev.filter((t) => t !== dropped));
+    if (activeTable === dropped) {
+      setActiveTable(null);
+    }
+    loadTables(schema);
+  }
+
+  /* copy DDL */
+  function copyTableDdl() {
+    if (!activeTable || columns.length === 0) return;
+    const colDefs = columns.map((c) => {
+      let def = `  "${c.name}" ${c.dataType}`;
+      if (c.isPrimary) def += ' PRIMARY KEY';
+      if (!c.isNullable && !c.isPrimary) def += ' NOT NULL';
+      if (c.defaultValue) def += ` DEFAULT ${c.defaultValue}`;
+      return def;
+    });
+    const ddl = `CREATE TABLE ${schema}.${activeTable} (\n${colDefs.join(',\n')}\n);`;
+    navigator.clipboard.writeText(ddl);
+    setCopiedDdl(true);
+    setTimeout(() => setCopiedDdl(false), 2000);
+  }
+
   const filteredTables = tables.filter((t) =>
     t.name.toLowerCase().includes(tableSearch.toLowerCase())
   );
@@ -187,41 +332,67 @@ export default function TableEditorPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const startRow = (page - 1) * PAGE_SIZE + 1;
   const endRow = Math.min(page * PAGE_SIZE, total);
+  const activeTableSummary = tables.find((t) => t.name === activeTable);
 
-  /* ─── Render ───────────────────────────────────────────────── */
   return (
     <div className="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-background">
 
-      {/* ── Left Sidebar ──────────────────────────────────────── */}
-      <aside className="w-56 shrink-0 flex flex-col border-r border-border bg-[#1c1c1c] overflow-hidden">
-        {/* Schema selector */}
-        <div className="px-3 py-2 border-b border-border">
-          <button className="w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs text-foreground bg-background/60 border border-border hover:border-emerald-500/50 transition-colors">
-            <div className="flex items-center gap-1.5">
-              <Globe className="h-3 w-3 text-emerald-400" />
-              <span className="font-mono">schema {schema}</span>
+      {/* ── Left Sidebar (Supabase Style) ──────────────────────── */}
+      <aside className="w-60 shrink-0 flex flex-col border-r border-border bg-[#181818] overflow-hidden select-none">
+        {/* Schema selector dropdown */}
+        <div className="p-2 border-b border-border/70 relative">
+          <button
+            onClick={() => setSchemaMenuOpen(!schemaMenuOpen)}
+            className="w-full flex items-center justify-between gap-2 rounded px-2.5 py-1.5 text-xs text-foreground bg-[#222222] border border-border/80 hover:border-emerald-500/50 transition-colors shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <Globe className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="font-mono font-medium">schema <strong className="text-emerald-400">{schema}</strong></span>
             </div>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
+
+          {schemaMenuOpen && (
+            <div className="absolute top-11 left-2 right-2 z-30 rounded-md border border-border bg-[#222222] shadow-xl py-1 text-xs">
+              {['public', 'auth'].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    setSchema(s);
+                    setSchemaMenuOpen(false);
+                  }}
+                  className={cn(
+                    'w-full flex items-center justify-between px-3 py-1.5 text-left transition-colors font-mono',
+                    schema === s
+                      ? 'bg-emerald-500/10 text-emerald-400 font-semibold'
+                      : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                  )}
+                >
+                  <span>{s}</span>
+                  {schema === s && <Check className="h-3 w-3" />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* New table + search */}
-        <div className="px-3 py-2 space-y-2 border-b border-border">
+        {/* New table button + Search */}
+        <div className="p-2 space-y-1.5 border-b border-border/60">
           <Button
             size="sm"
             variant="outline"
-            className="w-full h-7 text-xs justify-start gap-1.5"
+            className="w-full h-7 text-xs justify-start gap-1.5 border-border/80 bg-[#222222] hover:bg-[#282828]"
             onClick={() => setCreateOpen(true)}
           >
-            <Plus className="h-3.5 w-3.5" /> New table
+            <Plus className="h-3.5 w-3.5 text-emerald-400" /> New table
           </Button>
           <div className="relative">
-            <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
             <Input
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
               placeholder="Search tables..."
-              className="h-7 pl-7 text-xs bg-background/50"
+              className="h-7 pl-7 text-xs bg-[#161616] border-border/60"
             />
           </div>
         </div>
@@ -229,25 +400,46 @@ export default function TableEditorPage() {
         {/* Table list */}
         <div className="flex-1 overflow-y-auto py-1">
           {tablesLoading ? (
-            <div className="px-3 py-4 text-xs text-muted-foreground">Loading...</div>
+            <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2">
+              <RefreshCw className="h-3 w-3 animate-spin text-emerald-400" />
+              <span>Loading tables...</span>
+            </div>
           ) : filteredTables.length === 0 ? (
-            <div className="px-3 py-4 text-xs text-muted-foreground">No tables</div>
+            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+              <Table2 className="h-6 w-6 mx-auto mb-2 opacity-30" />
+              <span>No tables in {schema}</span>
+            </div>
           ) : (
             filteredTables.map((t) => (
-              <button
+              <div
                 key={t.name}
                 onClick={() => openTable(t.name)}
                 className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors group',
+                  'w-full flex items-center justify-between gap-1.5 px-3 py-1.5 text-xs text-left cursor-pointer group transition-colors',
                   activeTable === t.name
-                    ? 'bg-emerald-500/10 text-emerald-400'
+                    ? 'bg-emerald-500/10 text-emerald-400 font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
                 )}
               >
-                <Table2 className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate font-mono">{t.name}</span>
-                <Globe className="h-2.5 w-2.5 ml-auto shrink-0 opacity-50" />
-              </button>
+                <div className="flex items-center gap-2 truncate">
+                  <Table2 className={cn('h-3.5 w-3.5 shrink-0', activeTable === t.name ? 'text-emerald-400' : 'opacity-60')} />
+                  <span className="truncate font-mono">{t.name}</span>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDropTableTarget(t.name);
+                    }}
+                    className="h-5 w-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-400 text-muted-foreground transition-all"
+                    title={`Drop table ${t.name}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                  <Globe className="h-2.5 w-2.5 shrink-0 opacity-40" />
+                </div>
+              </div>
             ))
           )}
         </div>
@@ -256,20 +448,20 @@ export default function TableEditorPage() {
       {/* ── Main Area ─────────────────────────────────────────── */}
       <div className="flex flex-1 flex-col overflow-hidden">
 
-        {/* Table tabs bar */}
-        <div className="flex h-9 shrink-0 items-center border-b border-border bg-[#1c1c1c] px-1 gap-0.5 overflow-x-auto">
+        {/* Table tabs bar (Supabase style) */}
+        <div className="flex h-9 shrink-0 items-center border-b border-border bg-[#181818] px-1 gap-1 overflow-x-auto no-scrollbar">
           {openTabs.map((name) => (
             <div
               key={name}
               onClick={() => { setActiveTable(name); setActiveTab('data'); }}
               className={cn(
-                'flex items-center gap-1.5 h-7 px-3 rounded-t text-xs cursor-pointer select-none group transition-colors shrink-0',
+                'flex items-center gap-2 h-7 px-3 rounded-t text-xs cursor-pointer select-none group transition-all shrink-0 border',
                 activeTable === name
-                  ? 'bg-background text-foreground border border-b-0 border-border'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                  ? 'bg-background text-foreground border-border border-b-transparent font-medium shadow-sm'
+                  : 'bg-[#181818] border-transparent text-muted-foreground hover:text-foreground hover:bg-white/5'
               )}
             >
-              <Table2 className="h-3 w-3" />
+              <Table2 className="h-3 w-3 text-emerald-400" />
               <span className="font-mono">{name}</span>
               <button
                 onClick={(e) => closeTab(name, e)}
@@ -279,192 +471,352 @@ export default function TableEditorPage() {
               </button>
             </div>
           ))}
-          {openTabs.length > 0 && (
-            <button
-              className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5 ml-1"
-              title="New tab"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          )}
+
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5 ml-1 shrink-0"
+            title="Create new table"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         </div>
 
         {activeTable ? (
           <>
-            {/* ── Toolbar ───────────────────────────────────────── */}
+            {/* ── Supabase Toolbar ──────────────────────────────── */}
             <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-background px-3 gap-2">
-              {/* Left: filter + sort + rls */}
-              <div className="flex items-center gap-1.5">
-                {/* Filter */}
-                <div className="relative flex items-center">
-                  <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground" />
+              {/* Left: filter + sort + rls badge */}
+              <div className="flex items-center gap-1.5 flex-1 max-w-2xl">
+                {/* Search / Filter input */}
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
                     value={filterText}
                     onChange={(e) => setFilterText(e.target.value)}
-                    placeholder={`Filter by ${columns[0]?.name ?? 'id'}, ${columns[1]?.name ?? 'name'}, … or ask AI`}
-                    className="h-7 pl-7 pr-2 w-80 text-xs bg-background/50 border-border"
+                    placeholder={`Filter by ${columns[0]?.name ?? 'id'}, ${columns[1]?.name ?? 'name'}…`}
+                    className="h-7 pl-8 pr-2 w-full text-xs bg-[#161616] border-border/80 font-mono"
                   />
+                  {filterText && (
+                    <button
+                      onClick={() => setFilterText('')}
+                      className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
 
-                <div className="h-5 w-px bg-border mx-1" />
+                <div className="h-4 w-px bg-border mx-1" />
 
-                <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2">
-                  <ArrowUpDown className="h-3.5 w-3.5" /> Sort
+                {/* Sort indicator button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (columns.length > 0 && columns[0]) handleSort(columns[0].name);
+                  }}
+                  className={cn(
+                    'h-7 gap-1.5 text-xs px-2',
+                    sortCol ? 'text-emerald-400 bg-emerald-500/10' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  title={sortCol ? `Sorted by ${sortCol} (${sortDir})` : 'Sort records'}
+                >
+                  <ArrowUpDown className="h-3.5 w-3.5" />
+                  <span>{sortCol ? `${sortCol} ${sortDir}` : 'Sort'}</span>
                 </Button>
 
                 {/* RLS policies badge */}
-                <button className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border hover:border-emerald-500/50 text-muted-foreground hover:text-foreground transition-colors">
-                  <Shield className="h-3 w-3" />
+                <div className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border bg-[#181818] text-muted-foreground">
+                  <Shield className="h-3 w-3 text-emerald-400" />
                   <span>RLS policies</span>
-                </button>
+                </div>
               </div>
 
-              {/* Right: role + refresh + insert */}
-              <div className="flex items-center gap-1.5">
-                <button className="flex items-center gap-1 h-7 px-2 rounded text-xs border border-border text-muted-foreground hover:text-foreground transition-colors">
-                  Role <span className="font-semibold text-foreground">postgres</span>
-                  <ChevronDown className="h-3 w-3" />
-                </button>
+              {/* Right: Actions */}
+              <div className="flex items-center gap-2">
+                {/* Delete selected rows button */}
+                {selected.size > 0 && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setDeleteConfirmOpen(true)}
+                    className="h-7 gap-1.5 px-2.5 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete {selected.size} row{selected.size > 1 ? 's' : ''}</span>
+                  </Button>
+                )}
 
+                {/* Role indicator */}
+                <div className="hidden sm:flex items-center gap-1 h-7 px-2.5 rounded text-xs border border-border bg-[#1c1c1c] text-muted-foreground">
+                  Role <span className="font-semibold text-foreground font-mono">postgres</span>
+                </div>
+
+                {/* Refresh */}
                 <Button
-                  variant="ghost" size="sm"
+                  variant="ghost"
+                  size="sm"
                   className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                  title="Refresh"
+                  title="Refresh records"
                   onClick={() => loadTableData(activeTable, page)}
                 >
-                  <RefreshCw className={cn('h-3.5 w-3.5', gridLoading && 'animate-spin')} />
+                  <RefreshCw className={cn('h-3.5 w-3.5', gridLoading && 'animate-spin text-emerald-400')} />
                 </Button>
 
+                {/* Insert Row Button */}
                 <Button
                   size="sm"
-                  className="h-7 gap-1.5 px-3 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+                  onClick={() => setInsertOpen(true)}
+                  className="h-7 gap-1.5 px-3 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-sm"
                 >
                   <Plus className="h-3.5 w-3.5" /> Insert
                 </Button>
               </div>
             </div>
 
-            {/* ── Grid ─────────────────────────────────────────── */}
-            <div className="flex-1 overflow-auto">
-              {gridError ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-sm text-muted-foreground">
-                    <p className="text-red-400 font-medium">Error loading data</p>
-                    <p className="mt-1">{gridError}</p>
-                    <Button size="sm" className="mt-3" onClick={() => loadTableData(activeTable, page)}>Retry</Button>
+            {/* ── Main View: Data Grid OR Definition Schema ──────── */}
+            {activeTab === 'definition' ? (
+              /* ── Definition Tab (Schema View) ──────────────────── */
+              <div className="flex-1 overflow-auto p-4 space-y-4 bg-background">
+                {/* Table Summary Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                    <div className="text-[11px] text-muted-foreground">Table Name</div>
+                    <div className="text-sm font-semibold font-mono text-emerald-400 mt-0.5">{schema}.{activeTable}</div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                    <div className="text-[11px] text-muted-foreground">Columns</div>
+                    <div className="text-sm font-semibold font-mono text-foreground mt-0.5">{columns.length} columns</div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                    <div className="text-[11px] text-muted-foreground">Live Rows</div>
+                    <div className="text-sm font-semibold font-mono text-foreground mt-0.5">{total} records</div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                    <div className="text-[11px] text-muted-foreground">Disk Size</div>
+                    <div className="text-sm font-semibold font-mono text-foreground mt-0.5">
+                      {activeTableSummary?.sizeBytes ? `${(activeTableSummary.sizeBytes / 1024).toFixed(1)} KB` : '8.0 KB'}
+                    </div>
                   </div>
                 </div>
-              ) : (
-                <table className="w-full text-xs border-collapse min-w-max">
-                  <thead className="sticky top-0 z-10 bg-[#1c1c1c]">
-                    <tr className="border-b border-border">
-                      {/* Checkbox col */}
-                      <th className="w-10 px-3 py-2 text-left border-r border-border">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={toggleAll}
-                          className="h-3.5 w-3.5 rounded accent-emerald-500"
-                        />
-                      </th>
-                      {columns.map((col) => (
-                        <th
-                          key={col.name}
-                          className="px-3 py-2 text-left font-medium text-muted-foreground border-r border-border whitespace-nowrap min-w-[140px] group hover:bg-white/5 cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2">
-                            {col.isPrimary && (
-                              <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold">PK</span>
-                            )}
-                            <span className="text-foreground font-mono">{col.name}</span>
-                            <span className="text-[10px] text-muted-foreground/60 font-normal">{shortType(col.dataType)}</span>
-                            <ChevronDown className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-60" />
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {gridLoading ? (
-                      Array.from({ length: 8 }).map((_, i) => (
-                        <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 border-r border-border">
-                            <div className="h-3 w-3.5 rounded bg-muted animate-pulse" />
-                          </td>
-                          {Array.from({ length: Math.max(columns.length, 4) }).map((_, j) => (
-                            <td key={j} className="px-3 py-2 border-r border-border">
-                              <div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${60 + Math.random() * 60}px` }} />
-                            </td>
-                          ))}
-                        </tr>
-                      ))
-                    ) : rows.length === 0 ? (
-                      <tr>
-                        <td colSpan={columns.length + 1} className="py-16 text-center text-muted-foreground">
-                          No rows in this table yet. Click <strong className="text-foreground">Insert</strong> to add one.
-                        </td>
-                      </tr>
-                    ) : (
-                      rows.map((row, i) => (
-                        <tr
-                          key={i}
-                          className={cn(
-                            'border-b border-border/40 hover:bg-white/[0.03] transition-colors group',
-                            selected.has(i) && 'bg-emerald-500/5'
-                          )}
-                        >
-                          <td className="w-10 px-3 py-1.5 border-r border-border/50">
-                            <input
-                              type="checkbox"
-                              checked={selected.has(i)}
-                              onChange={() => toggleRow(i)}
-                              className="h-3.5 w-3.5 rounded accent-emerald-500"
-                            />
-                          </td>
-                          {columns.map((col) => {
-                            const val = row[col.name];
-                            const str = cellStr(val);
-                            const isNull = val === null || val === undefined;
-                            return (
-                              <td
-                                key={col.name}
-                                className="px-3 py-1.5 border-r border-border/50 whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis"
-                              >
-                                {isNull ? (
-                                  <span className="text-muted-foreground/40 italic text-[11px]">NULL</span>
-                                ) : (
-                                  <span className={cn(
-                                    'font-mono',
-                                    col.isPrimary ? 'text-amber-400/80' : 'text-foreground',
-                                    typeof val === 'boolean' ? 'text-purple-400' : '',
-                                    typeof val === 'number' ? 'text-blue-400' : '',
-                                  )}>
-                                    {str.length > 60 ? str.slice(0, 60) + '…' : str}
-                                  </span>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </div>
 
-            {/* ── Bottom bar ───────────────────────────────────── */}
-            <div className="flex h-9 shrink-0 items-center justify-between border-t border-border bg-[#1c1c1c] px-3">
+                {/* Definition Header */}
+                <div className="flex items-center justify-between pt-2">
+                  <div className="flex items-center gap-2">
+                    <Columns className="h-4 w-4 text-emerald-400" />
+                    <h3 className="text-sm font-semibold text-foreground">Column Definitions</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={copyTableDdl}
+                      className="h-7 gap-1.5 text-xs border-border bg-[#181818]"
+                    >
+                      {copiedDdl ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                      <span>{copiedDdl ? 'Copied DDL' : 'Copy DDL'}</span>
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => setDropTableTarget(activeTable)}
+                      className="h-7 gap-1.5 text-xs bg-red-600/90 hover:bg-red-600"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>Drop Table</span>
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Columns Table */}
+                <div className="rounded-md border border-border overflow-hidden bg-[#181818]">
+                  <table className="w-full text-xs border-collapse">
+                    <thead className="bg-[#141414] border-b border-border text-muted-foreground font-medium">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Column</th>
+                        <th className="px-3 py-2 text-left">Type</th>
+                        <th className="px-3 py-2 text-left">Default</th>
+                        <th className="px-3 py-2 text-left">Nullable</th>
+                        <th className="px-3 py-2 text-left">Key</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {columns.map((col) => (
+                        <tr key={col.name} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="px-3 py-2 font-mono font-medium text-foreground flex items-center gap-2">
+                            {col.isPrimary && <Key className="h-3 w-3 text-amber-400" />}
+                            <span>{col.name}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[11px]">
+                              {col.dataType}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-mono text-muted-foreground">
+                            {col.defaultValue ? col.defaultValue : <span className="opacity-40 italic">None</span>}
+                          </td>
+                          <td className="px-3 py-2">
+                            {col.isNullable ? (
+                              <span className="text-muted-foreground">Nullable</span>
+                            ) : (
+                              <span className="text-amber-400 font-semibold">NOT NULL</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {col.isPrimary ? (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold text-[10px]">
+                                PRIMARY KEY
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground/40">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              /* ── Data Grid Tab (Supabase Spreadsheet) ───────────── */
+              <div className="flex-1 overflow-auto">
+                {gridError ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-sm text-muted-foreground">
+                      <p className="text-red-400 font-medium">Error loading data</p>
+                      <p className="mt-1">{gridError}</p>
+                      <Button size="sm" className="mt-3" onClick={() => loadTableData(activeTable, page)}>Retry</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <table className="w-full text-xs border-collapse min-w-max">
+                    <thead className="sticky top-0 z-10 bg-[#181818]">
+                      <tr className="border-b border-border">
+                        {/* Checkbox col */}
+                        <th className="w-10 px-3 py-2 text-left border-r border-border">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            className="h-3.5 w-3.5 rounded accent-emerald-500"
+                          />
+                        </th>
+                        {columns.map((col) => (
+                          <th
+                            key={col.name}
+                            onClick={() => handleSort(col.name)}
+                            className="px-3 py-2 text-left font-medium text-muted-foreground border-r border-border whitespace-nowrap min-w-[140px] group hover:bg-white/5 cursor-pointer select-none"
+                          >
+                            <div className="flex items-center gap-2">
+                              {col.isPrimary && (
+                                <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold flex items-center gap-0.5">
+                                  <Key className="h-2 w-2" /> PK
+                                </span>
+                              )}
+                              <span className={cn('font-mono', sortCol === col.name ? 'text-emerald-400 font-bold' : 'text-foreground')}>
+                                {col.name}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground/60 font-normal">{shortType(col.dataType)}</span>
+                              {sortCol === col.name ? (
+                                sortDir === 'asc' ? (
+                                  <ArrowUp className="h-3 w-3 text-emerald-400 ml-auto" />
+                                ) : (
+                                  <ArrowDown className="h-3 w-3 text-emerald-400 ml-auto" />
+                                )
+                              ) : (
+                                <ChevronDown className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-60" />
+                              )}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gridLoading ? (
+                        Array.from({ length: 8 }).map((_, i) => (
+                          <tr key={i} className="border-b border-border/50">
+                            <td className="px-3 py-2 border-r border-border">
+                              <div className="h-3 w-3.5 rounded bg-muted animate-pulse" />
+                            </td>
+                            {Array.from({ length: Math.max(columns.length, 4) }).map((_, j) => (
+                              <td key={j} className="px-3 py-2 border-r border-border">
+                                <div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${60 + Math.random() * 60}px` }} />
+                              </td>
+                            ))}
+                          </tr>
+                        ))
+                      ) : displayedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={columns.length + 1} className="py-16 text-center text-muted-foreground">
+                            {filterText ? (
+                              <span>No rows match the filter &ldquo;{filterText}&rdquo;.</span>
+                            ) : (
+                              <span>No rows in this table yet. Click <strong className="text-foreground">Insert</strong> to add one.</span>
+                            )}
+                          </td>
+                        </tr>
+                      ) : (
+                        displayedRows.map((row, i) => (
+                          <tr
+                            key={i}
+                            className={cn(
+                              'border-b border-border/40 hover:bg-white/[0.03] transition-colors group',
+                              selected.has(i) && 'bg-emerald-500/5'
+                            )}
+                          >
+                            <td className="w-10 px-3 py-1.5 border-r border-border/50">
+                              <input
+                                type="checkbox"
+                                checked={selected.has(i)}
+                                onChange={() => toggleRow(i)}
+                                className="h-3.5 w-3.5 rounded accent-emerald-500"
+                              />
+                            </td>
+                            {columns.map((col) => {
+                              const val = row[col.name];
+                              const str = cellStr(val);
+                              const isNull = val === null || val === undefined;
+                              return (
+                                <td
+                                  key={col.name}
+                                  className="px-3 py-1.5 border-r border-border/50 whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis"
+                                >
+                                  {isNull ? (
+                                    <span className="text-muted-foreground/40 italic text-[11px]">NULL</span>
+                                  ) : (
+                                    <span className={cn(
+                                      'font-mono',
+                                      col.isPrimary ? 'text-amber-400/90' : 'text-foreground',
+                                      typeof val === 'boolean' ? 'text-purple-400 font-semibold' : '',
+                                      typeof val === 'number' ? 'text-blue-400' : '',
+                                    )}>
+                                      {str.length > 60 ? str.slice(0, 60) + '…' : str}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {/* ── Bottom Bar (Data / Definition + Pagination) ─── */}
+            <div className="flex h-9 shrink-0 items-center justify-between border-t border-border bg-[#181818] px-3">
               {/* Tabs: Data / Definition */}
-              <div className="flex items-center gap-0.5">
+              <div className="flex items-center gap-1">
                 {(['data', 'definition'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
                     className={cn(
-                      'h-6 px-3 text-xs rounded capitalize transition-colors',
+                      'h-6 px-3 text-xs rounded capitalize transition-colors font-medium',
                       activeTab === tab
-                        ? 'bg-background text-foreground font-medium'
+                        ? 'bg-background text-emerald-400 border border-border/60 shadow-sm'
                         : 'text-muted-foreground hover:text-foreground'
                     )}
                   >
@@ -476,14 +828,14 @@ export default function TableEditorPage() {
               {/* Pagination */}
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {selected.size > 0 && (
-                  <span className="text-emerald-400 font-medium mr-2">{selected.size} selected</span>
+                  <span className="text-emerald-400 font-semibold mr-2">{selected.size} selected</span>
                 )}
                 <span>
-                  {total === 0 ? '0 rows' : `${startRow}–${endRow} of ${total} rows`}
+                  {total === 0 ? '0 records' : `${startRow}–${endRow} of ${total} records`}
                 </span>
                 <span className="text-muted-foreground/40">|</span>
                 <span>{PAGE_SIZE} rows</span>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 ml-1">
                   <button
                     onClick={() => loadTableData(activeTable, page - 1)}
                     disabled={page <= 1 || gridLoading}
@@ -491,7 +843,7 @@ export default function TableEditorPage() {
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
-                  <span>Page {page} of {totalPages}</span>
+                  <span className="font-mono">Page {page} of {totalPages}</span>
                   <button
                     onClick={() => loadTableData(activeTable, page + 1)}
                     disabled={page >= totalPages || gridLoading}
@@ -504,23 +856,111 @@ export default function TableEditorPage() {
             </div>
           </>
         ) : (
-          /* Empty state — no table selected */
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-            <Table2 className="h-10 w-10 opacity-20" />
-            <p className="text-sm">Select a table from the sidebar to view data</p>
-            <Button size="sm" onClick={() => setCreateOpen(true)} className="mt-1">
-              <Plus className="h-3.5 w-3.5 mr-1.5" /> New table
+          /* Empty State — No Table Selected */
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground p-6">
+            <Table2 className="h-12 w-12 opacity-20 text-emerald-400" />
+            <h4 className="text-sm font-semibold text-foreground">No table selected</h4>
+            <p className="text-xs max-w-sm">Select a table from the sidebar to inspect its records and definition, or create a new table.</p>
+            <Button size="sm" onClick={() => setCreateOpen(true)} className="mt-2 bg-emerald-600 hover:bg-emerald-500 text-white gap-1.5 text-xs">
+              <Plus className="h-3.5 w-3.5" /> New table
             </Button>
           </div>
         )}
       </div>
 
+      {/* ── Create Table Modal ─────────────────────────────────── */}
       <CreateTableModal
         open={createOpen}
         onOpenChange={setCreateOpen}
         projectSlug={slug}
-        onSuccess={() => { loadTables(); }}
+        onSuccess={() => { loadTables(schema); }}
       />
+
+      {/* ── Insert Row Modal ───────────────────────────────────── */}
+      {activeTable && (
+        <InsertRowModal
+          open={insertOpen}
+          onOpenChange={setInsertOpen}
+          projectSlug={slug}
+          tableName={activeTable}
+          schema={schema}
+          columns={columns}
+          onSuccess={() => { loadTableData(activeTable, page); }}
+        />
+      )}
+
+      {/* ── Delete Rows Confirmation Dialog ───────────────────── */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="max-w-md bg-[#1c1c1c] text-foreground border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-red-400">
+              <AlertTriangle className="h-4 w-4" />
+              Delete {selected.size} record{selected.size > 1 ? 's' : ''}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Are you sure you want to permanently delete the {selected.size} selected row{selected.size > 1 ? 's' : ''} from <strong className="text-foreground font-mono">{schema}.{activeTable}</strong>? This action cannot be reversed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-3 border-t border-border flex items-center justify-between sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteConfirmOpen(false)}
+              className="text-xs text-muted-foreground"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deletingRows}
+              size="sm"
+              onClick={handleDeleteSelectedRows}
+              className="text-xs bg-red-600 hover:bg-red-500 text-white font-semibold"
+            >
+              {deletingRows ? 'Deleting...' : 'Delete permanently'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Drop Table Confirmation Dialog ─────────────────────── */}
+      <Dialog open={!!dropTableTarget} onOpenChange={(open) => !open && setDropTableTarget(null)}>
+        <DialogContent className="max-w-md bg-[#1c1c1c] text-foreground border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-red-400">
+              <AlertTriangle className="h-4 w-4" />
+              Drop Table &ldquo;{dropTableTarget}&rdquo;
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Are you sure you want to drop table <strong className="text-foreground font-mono">{schema}.{dropTableTarget}</strong>? This will permanently delete the table and all its data and dependent objects (CASCADE).
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-3 border-t border-border flex items-center justify-between sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setDropTableTarget(null)}
+              className="text-xs text-muted-foreground"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={droppingTable}
+              size="sm"
+              onClick={handleDropTable}
+              className="text-xs bg-red-600 hover:bg-red-500 text-white font-semibold"
+            >
+              {droppingTable ? 'Dropping...' : 'Drop table'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
