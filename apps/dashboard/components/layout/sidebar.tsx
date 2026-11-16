@@ -71,7 +71,12 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
       : [];
   const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
   const { theme, setTheme } = useTheme();
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const projectBase = currentProject ? `/projects/${currentProject.slug}` : null;
 
@@ -82,7 +87,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
     return pathname.startsWith(full);
   }
 
-  const themeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
+  const themeIcon = !mounted ? Moon : theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
   const ThemeIcon = themeIcon;
 
   return (
@@ -225,10 +230,15 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
           ) : (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
+                <button
+                  suppressHydrationWarning
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                >
                   <ThemeIcon className="h-4 w-4" />
                   <span>Theme</span>
-                  <span className="ml-auto text-xs capitalize opacity-60">{theme}</span>
+                  <span className="ml-auto text-xs capitalize opacity-60" suppressHydrationWarning>
+                    {mounted ? theme : ''}
+                  </span>
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" side="top">

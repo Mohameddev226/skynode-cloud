@@ -126,57 +126,64 @@ CREATE TABLE IF NOT EXISTS public.classes (
 );
 `;
 
+const INITIAL_QUERIES: SavedQuery[] = [
+  {
+    id: 'q-1',
+    name: 'Untitled query',
+    sql: DEFAULT_SQL,
+    folder: 'private',
+    isFavorite: false,
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  },
+  {
+    id: 'q-2',
+    name: 'Untitled query',
+    sql: '-- Query 2\nSELECT * FROM public.schools LIMIT 10;',
+    folder: 'private',
+    isFavorite: false,
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  },
+  {
+    id: 'q-3',
+    name: 'Untitled query',
+    sql: '-- Query 3\nSELECT * FROM public.students LIMIT 10;',
+    folder: 'private',
+    isFavorite: false,
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  },
+];
+
 export default function SqlEditorPage() {
   const params = useParams();
   const slug = params.slug as string;
   const storageKey = `skynode_sql_queries_${slug}`;
   const { resolvedTheme } = useTheme();
 
-  // Initial Queries
-  const [queries, setQueries] = React.useState<SavedQuery[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(storageKey);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch {}
-    }
-    return [
-      {
-        id: 'q-1',
-        name: 'Untitled query',
-        sql: DEFAULT_SQL,
-        folder: 'private',
-        isFavorite: false,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      {
-        id: 'q-2',
-        name: 'Untitled query',
-        sql: '-- Query 2\nSELECT * FROM public.schools LIMIT 10;',
-        folder: 'private',
-        isFavorite: false,
-        createdAt: Date.now() - 1000,
-        updatedAt: Date.now() - 1000,
-      },
-      {
-        id: 'q-3',
-        name: 'Untitled query',
-        sql: '-- Query 3\nSELECT * FROM public.students LIMIT 10;',
-        folder: 'private',
-        isFavorite: false,
-        createdAt: Date.now() - 2000,
-        updatedAt: Date.now() - 2000,
-      },
-    ];
-  });
+  // Initial Queries — initialized with constant to ensure identical SSR and client hydration
+  const [queries, setQueries] = React.useState<SavedQuery[]>(INITIAL_QUERIES);
 
   // Open tabs list (query IDs)
   const [openTabIds, setOpenTabIds] = React.useState<string[]>(['q-1', 'q-2']);
   const [activeQueryId, setActiveQueryId] = React.useState<string>('q-1');
+
+  // Load stored queries from localStorage safely after client hydration
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setQueries(parsed);
+          if (!parsed.some((q: SavedQuery) => q.id === activeQueryId)) {
+            setActiveQueryId(parsed[0].id);
+          }
+        }
+      }
+    } catch {}
+  }, [storageKey]);
 
   // Active query code & dirty tracking
   const activeQuery = queries.find((q) => q.id === activeQueryId) ?? queries[0]!;
