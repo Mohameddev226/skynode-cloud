@@ -40,8 +40,15 @@ import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import { useTheme } from '@/providers/theme-provider';
 
-// Monaco editor — client-side dynamic load
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+// Monaco editor — client-side dynamic load with hydration-safe fallback
+const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full w-full items-center justify-center bg-background text-xs text-muted-foreground font-mono">
+      Loading SQL editor...
+    </div>
+  ),
+});
 
 interface QueryResult {
   columns: string[];
