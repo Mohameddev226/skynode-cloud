@@ -55,7 +55,7 @@ const projectNavItems = [
   { label: 'Project Overview', icon: LayoutDashboard, href: '' },
   { label: 'Table Editor',     icon: Table2,          href: '/database' },
   { label: 'SQL Editor',       icon: Terminal,        href: '/database/sql' },
-  { label: 'Database',         icon: Database,        href: '/database' },
+  { label: 'Database',         icon: Database,        href: '/database/tables' },
   { label: 'Authentication',   icon: Shield,          href: '/auth' },
   { label: 'Storage',          icon: HardDrive,       href: '/storage' },
   { label: 'API Docs & Keys',  icon: Zap,             href: '/api' },
@@ -168,7 +168,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
               const active = isActive(item.href);
               const href = projectBase + item.href;
               return collapsed ? (
-                <Tooltip key={item.href}>
+                <Tooltip key={item.label}>
                   <TooltipTrigger asChild>
                     <Link
                       href={href}
@@ -186,7 +186,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
                 </Tooltip>
               ) : (
                 <Link
-                  key={item.href}
+                  key={item.label}
                   href={href}
                   className={cn(
                     'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors',
