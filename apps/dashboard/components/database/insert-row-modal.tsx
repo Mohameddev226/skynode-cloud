@@ -184,11 +184,11 @@ export function InsertRowModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[85vh] flex flex-col bg-[#1c1c1c] text-foreground border-border">
+      <DialogContent className="max-w-xl max-h-[85vh] flex flex-col bg-card text-foreground border-border">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base font-semibold">
-            <Plus className="h-4 w-4 text-emerald-400" />
-            Insert row into <span className="font-mono text-emerald-400">{schema}.{tableName}</span>
+            <Plus className="h-4 w-4 text-emerald-500" />
+            Insert row into <span className="font-mono text-emerald-500">{schema}.{tableName}</span>
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
             Provide values for the new record. Fields with database defaults or auto-increments can be left empty.
@@ -196,7 +196,7 @@ export function InsertRowModal({
         </DialogHeader>
 
         {error && (
-          <div className="flex items-start gap-2 p-2.5 rounded-md bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+          <div className="flex items-start gap-2 p-2.5 rounded-md bg-red-500/10 border border-red-500/30 text-red-500 text-xs">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
@@ -211,11 +211,11 @@ export function InsertRowModal({
             const isBool = dt.includes('bool');
 
             return (
-              <div key={col.name} className="space-y-1.5 p-2 rounded border border-border/50 bg-[#161616]">
+              <div key={col.name} className="space-y-1.5 p-2 rounded border border-border bg-muted/20">
                 <div className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-1.5 font-mono">
                     {col.isPrimary && (
-                      <span className="flex items-center gap-0.5 text-[10px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-400 font-bold">
+                      <span className="flex items-center gap-0.5 text-[10px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-500 font-bold">
                         <Key className="h-2.5 w-2.5" /> PK
                       </span>
                     )}

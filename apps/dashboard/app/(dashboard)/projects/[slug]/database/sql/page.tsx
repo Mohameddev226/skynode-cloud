@@ -38,6 +38,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import api from '@/lib/api';
+import { useTheme } from '@/providers/theme-provider';
 
 // Monaco editor — client-side dynamic load
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -129,6 +130,7 @@ export default function SqlEditorPage() {
   const params = useParams();
   const slug = params.slug as string;
   const storageKey = `skynode_sql_queries_${slug}`;
+  const { resolvedTheme } = useTheme();
 
   // Initial Queries
   const [queries, setQueries] = React.useState<SavedQuery[]>(() => {
@@ -413,18 +415,18 @@ export default function SqlEditorPage() {
       onKeyDown={handleKeyDown}
     >
       {/* ── Top Header / Tab Bar (Supabase Style) ───────────────── */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-[#181818] px-2 gap-2">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-muted/40 px-2 gap-2">
         {/* Left: Sidebar Toggle + Open Tabs */}
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar flex-1">
           <button
             onClick={() => setShowLeftSidebar(!showLeftSidebar)}
-            className="flex h-7 w-7 items-center justify-center rounded border border-border/60 bg-[#222222] text-muted-foreground hover:text-foreground hover:bg-[#2a2a2a] transition-colors shrink-0"
+            className="flex h-7 w-7 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0 shadow-xs"
             title="Toggle SQL Editor sidebar"
           >
             <PanelLeft className="h-3.5 w-3.5" />
           </button>
 
-          <div className="h-4 w-px bg-border/60 mx-1 shrink-0" />
+          <div className="h-4 w-px bg-border mx-1 shrink-0" />
 
           {/* Open Tabs */}
           {openTabIds.map((tabId) => {
@@ -440,12 +442,12 @@ export default function SqlEditorPage() {
                 className={cn(
                   'group flex items-center gap-2 h-7 px-2.5 rounded-t text-xs cursor-pointer select-none border transition-all shrink-0',
                   isActive
-                    ? 'bg-[#1e1e1e] border-border border-b-transparent text-foreground font-medium shadow-sm'
-                    : 'bg-[#181818] border-transparent text-muted-foreground hover:text-foreground hover:bg-[#202020]'
+                    ? 'bg-background border-border border-b-transparent text-foreground font-medium shadow-xs'
+                    : 'bg-transparent border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60'
                 )}
               >
                 {/* [SQL] Badge Icon */}
-                <span className="rounded bg-muted/60 px-1 py-0.2 text-[9px] font-mono text-muted-foreground font-bold tracking-wider">
+                <span className="rounded bg-muted px-1 py-0.2 text-[9px] font-mono text-muted-foreground font-bold tracking-wider">
                   SQL
                 </span>
 
@@ -500,13 +502,13 @@ export default function SqlEditorPage() {
           </div>
 
           {/* More options menu */}
-          <button className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5">
+          <button className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted">
             <MoreVertical className="h-3.5 w-3.5" />
           </button>
 
           {/* Database Selector Pill */}
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-[#222222] px-2.5 py-1 text-xs text-foreground font-mono">
-            <Database className="h-3.5 w-3.5 text-emerald-400" />
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground font-mono shadow-xs">
+            <Database className="h-3.5 w-3.5 text-emerald-500" />
             <span>Database</span>
             <ChevronDown className="h-3 w-3 text-muted-foreground opacity-60" />
           </div>
@@ -516,7 +518,7 @@ export default function SqlEditorPage() {
             variant="ghost"
             size="sm"
             onClick={handleSaveQuery}
-            className="h-7 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-[#252525]"
+            className="h-7 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
             title="Save query (Ctrl+S)"
           >
             <Save className="h-3.5 w-3.5" />
@@ -529,7 +531,7 @@ export default function SqlEditorPage() {
             onClick={runQuery}
             disabled={status === 'running'}
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all',
+              'flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-all',
               status === 'running'
                 ? 'bg-emerald-700 opacity-60 cursor-not-allowed'
                 : 'bg-emerald-600 hover:bg-emerald-500 active:scale-95'
@@ -552,7 +554,7 @@ export default function SqlEditorPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left Queries Tree Sidebar (Supabase Style) */}
         {showLeftSidebar && (
-          <aside className="w-60 shrink-0 border-r border-border bg-[#181818] flex flex-col overflow-hidden">
+          <aside className="w-60 shrink-0 border-r border-border bg-sidebar flex flex-col overflow-hidden">
             {/* Header: SQL Editor title */}
             <div className="flex h-9 items-center justify-between px-3 border-b border-border/60">
               <span className="text-xs font-semibold tracking-wide text-foreground">
@@ -560,7 +562,7 @@ export default function SqlEditorPage() {
               </span>
               <button
                 onClick={handleCreateNewQuery}
-                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5"
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
                 title="New query"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -575,12 +577,12 @@ export default function SqlEditorPage() {
                   value={searchFilter}
                   onChange={(e) => setSearchFilter(e.target.value)}
                   placeholder="Search queries..."
-                  className="h-7 pl-6 pr-2 text-xs bg-[#202020] border-border/60"
+                  className="h-7 pl-6 pr-2 text-xs bg-background border-border font-mono"
                 />
               </div>
               <button
                 onClick={handleCreateNewQuery}
-                className="flex h-7 w-7 items-center justify-center rounded border border-border/60 bg-[#202020] text-muted-foreground hover:text-foreground hover:bg-[#252525] shrink-0"
+                className="flex h-7 w-7 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 shadow-xs"
                 title="New query"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -645,12 +647,12 @@ export default function SqlEditorPage() {
                           className={cn(
                             'group flex items-center justify-between px-2 py-1 rounded text-xs cursor-pointer transition-colors',
                             activeQueryId === q.id
-                              ? 'bg-[#252525] text-foreground font-medium'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-[#202020]'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
                           )}
                         >
                           <div className="flex items-center gap-2 truncate">
-                            <span className="rounded bg-muted/60 px-1 py-0.2 text-[8px] font-mono text-muted-foreground font-bold">
+                            <span className="rounded bg-muted px-1 py-0.2 text-[8px] font-mono text-muted-foreground font-bold">
                               SQL
                             </span>
                             <span className="truncate">{q.name}</span>
@@ -696,13 +698,13 @@ export default function SqlEditorPage() {
                           className={cn(
                             'group flex items-center justify-between px-2 py-1.5 rounded text-xs cursor-pointer transition-colors',
                             isActive
-                              ? 'bg-[#262626] text-foreground font-medium'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-[#1f1f1f]'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
                           )}
                         >
                           <div className="flex items-center gap-2 truncate flex-1 min-w-0">
                             {/* [SQL] Badge */}
-                            <span className="rounded bg-[#2f2f2f] px-1 py-0.2 text-[8px] font-mono text-muted-foreground font-bold shrink-0">
+                            <span className="rounded bg-muted px-1 py-0.2 text-[8px] font-mono text-muted-foreground font-bold shrink-0">
                               SQL
                             </span>
 
@@ -809,7 +811,7 @@ export default function SqlEditorPage() {
                         setOpenTabIds((prev) => [...prev, newId]);
                         setActiveQueryId(newId);
                       }}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-[#202020] transition-colors text-left truncate"
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-left truncate"
                     >
                       <Sparkles className="h-3 w-3 shrink-0 text-amber-500" />
                       <span className="truncate">{t.name}</span>
@@ -824,7 +826,7 @@ export default function SqlEditorPage() {
         {/* Center: Monaco Editor & Bottom Results */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Top Monaco Editor Pane */}
-          <div className="flex-[3] min-h-[240px] overflow-hidden bg-[#1e1e1e] border-b border-border">
+          <div className="flex-[3] min-h-[240px] overflow-hidden bg-background border-b border-border">
             <MonacoEditor
               height="100%"
               language="sql"
@@ -841,7 +843,7 @@ export default function SqlEditorPage() {
                   }
                 });
               }}
-              theme="vs-dark"
+              theme={resolvedTheme === 'light' ? 'vs' : 'vs-dark'}
               options={{
                 minimap: { enabled: false },
                 fontSize: 13,

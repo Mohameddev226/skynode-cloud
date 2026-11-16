@@ -338,22 +338,22 @@ export default function TableEditorPage() {
     <div className="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-background">
 
       {/* ── Left Sidebar (Supabase Style) ──────────────────────── */}
-      <aside className="w-60 shrink-0 flex flex-col border-r border-border bg-[#181818] overflow-hidden select-none">
+      <aside className="w-60 shrink-0 flex flex-col border-r border-border bg-sidebar overflow-hidden select-none">
         {/* Schema selector dropdown */}
         <div className="p-2 border-b border-border/70 relative">
           <button
             onClick={() => setSchemaMenuOpen(!schemaMenuOpen)}
-            className="w-full flex items-center justify-between gap-2 rounded px-2.5 py-1.5 text-xs text-foreground bg-[#222222] border border-border/80 hover:border-emerald-500/50 transition-colors shadow-sm"
+            className="w-full flex items-center justify-between gap-2 rounded px-2.5 py-1.5 text-xs text-foreground bg-background border border-border hover:border-emerald-500/50 transition-colors shadow-xs"
           >
             <div className="flex items-center gap-2">
-              <Globe className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="font-mono font-medium">schema <strong className="text-emerald-400">{schema}</strong></span>
+              <Globe className="h-3.5 w-3.5 text-emerald-500" />
+              <span className="font-mono font-medium">schema <strong className="text-emerald-500">{schema}</strong></span>
             </div>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
 
           {schemaMenuOpen && (
-            <div className="absolute top-11 left-2 right-2 z-30 rounded-md border border-border bg-[#222222] shadow-xl py-1 text-xs">
+            <div className="absolute top-11 left-2 right-2 z-30 rounded-md border border-border bg-popover text-popover-foreground shadow-xl py-1 text-xs">
               {['public', 'auth'].map((s) => (
                 <button
                   key={s}
@@ -364,8 +364,8 @@ export default function TableEditorPage() {
                   className={cn(
                     'w-full flex items-center justify-between px-3 py-1.5 text-left transition-colors font-mono',
                     schema === s
-                      ? 'bg-emerald-500/10 text-emerald-400 font-semibold'
-                      : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
                   <span>{s}</span>
@@ -381,10 +381,10 @@ export default function TableEditorPage() {
           <Button
             size="sm"
             variant="outline"
-            className="w-full h-7 text-xs justify-start gap-1.5 border-border/80 bg-[#222222] hover:bg-[#282828]"
+            className="w-full h-7 text-xs justify-start gap-1.5 border-border bg-background hover:bg-muted shadow-xs"
             onClick={() => setCreateOpen(true)}
           >
-            <Plus className="h-3.5 w-3.5 text-emerald-400" /> New table
+            <Plus className="h-3.5 w-3.5 text-emerald-500" /> New table
           </Button>
           <div className="relative">
             <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
@@ -392,7 +392,7 @@ export default function TableEditorPage() {
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
               placeholder="Search tables..."
-              className="h-7 pl-7 text-xs bg-[#161616] border-border/60"
+              className="h-7 pl-7 text-xs bg-background border-border font-mono"
             />
           </div>
         </div>
@@ -417,12 +417,12 @@ export default function TableEditorPage() {
                 className={cn(
                   'w-full flex items-center justify-between gap-1.5 px-3 py-1.5 text-xs text-left cursor-pointer group transition-colors',
                   activeTable === t.name
-                    ? 'bg-emerald-500/10 text-emerald-400 font-medium'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
                 )}
               >
                 <div className="flex items-center gap-2 truncate">
-                  <Table2 className={cn('h-3.5 w-3.5 shrink-0', activeTable === t.name ? 'text-emerald-400' : 'opacity-60')} />
+                  <Table2 className={cn('h-3.5 w-3.5 shrink-0', activeTable === t.name ? 'text-emerald-500' : 'opacity-60')} />
                   <span className="truncate font-mono">{t.name}</span>
                 </div>
 
@@ -432,7 +432,7 @@ export default function TableEditorPage() {
                       e.stopPropagation();
                       setDropTableTarget(t.name);
                     }}
-                    className="h-5 w-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-400 text-muted-foreground transition-all"
+                    className="h-5 w-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-destructive/20 hover:text-destructive text-muted-foreground transition-all"
                     title={`Drop table ${t.name}`}
                   >
                     <Trash2 className="h-3 w-3" />
@@ -449,7 +449,7 @@ export default function TableEditorPage() {
       <div className="flex flex-1 flex-col overflow-hidden">
 
         {/* Table tabs bar (Supabase style) */}
-        <div className="flex h-9 shrink-0 items-center border-b border-border bg-[#181818] px-1 gap-1 overflow-x-auto no-scrollbar">
+        <div className="flex h-9 shrink-0 items-center border-b border-border bg-muted/40 px-1 gap-1 overflow-x-auto no-scrollbar">
           {openTabs.map((name) => (
             <div
               key={name}
@@ -457,15 +457,15 @@ export default function TableEditorPage() {
               className={cn(
                 'flex items-center gap-2 h-7 px-3 rounded-t text-xs cursor-pointer select-none group transition-all shrink-0 border',
                 activeTable === name
-                  ? 'bg-background text-foreground border-border border-b-transparent font-medium shadow-sm'
-                  : 'bg-[#181818] border-transparent text-muted-foreground hover:text-foreground hover:bg-white/5'
+                  ? 'bg-background text-foreground border-border border-b-transparent font-medium shadow-xs'
+                  : 'bg-transparent border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60'
               )}
             >
-              <Table2 className="h-3 w-3 text-emerald-400" />
+              <Table2 className="h-3 w-3 text-emerald-500" />
               <span className="font-mono">{name}</span>
               <button
                 onClick={(e) => closeTab(name, e)}
-                className="h-3.5 w-3.5 rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-white/10"
+                className="h-3.5 w-3.5 rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-muted"
               >
                 <X className="h-2.5 w-2.5" />
               </button>
@@ -474,7 +474,7 @@ export default function TableEditorPage() {
 
           <button
             onClick={() => setCreateOpen(true)}
-            className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-white/5 ml-1 shrink-0"
+            className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted ml-1 shrink-0"
             title="Create new table"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -494,7 +494,7 @@ export default function TableEditorPage() {
                     value={filterText}
                     onChange={(e) => setFilterText(e.target.value)}
                     placeholder={`Filter by ${columns[0]?.name ?? 'id'}, ${columns[1]?.name ?? 'name'}…`}
-                    className="h-7 pl-8 pr-2 w-full text-xs bg-[#161616] border-border/80 font-mono"
+                    className="h-7 pl-8 pr-2 w-full text-xs bg-background border-border font-mono"
                   />
                   {filterText && (
                     <button
@@ -517,7 +517,7 @@ export default function TableEditorPage() {
                   }}
                   className={cn(
                     'h-7 gap-1.5 text-xs px-2',
-                    sortCol ? 'text-emerald-400 bg-emerald-500/10' : 'text-muted-foreground hover:text-foreground'
+                    sortCol ? 'text-emerald-500 bg-emerald-500/10' : 'text-muted-foreground hover:text-foreground'
                   )}
                   title={sortCol ? `Sorted by ${sortCol} (${sortDir})` : 'Sort records'}
                 >
@@ -526,8 +526,8 @@ export default function TableEditorPage() {
                 </Button>
 
                 {/* RLS policies badge */}
-                <div className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border bg-[#181818] text-muted-foreground">
-                  <Shield className="h-3 w-3 text-emerald-400" />
+                <div className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border bg-muted/30 text-muted-foreground">
+                  <Shield className="h-3 w-3 text-emerald-500" />
                   <span>RLS policies</span>
                 </div>
               </div>
@@ -548,7 +548,7 @@ export default function TableEditorPage() {
                 )}
 
                 {/* Role indicator */}
-                <div className="hidden sm:flex items-center gap-1 h-7 px-2.5 rounded text-xs border border-border bg-[#1c1c1c] text-muted-foreground">
+                <div className="hidden sm:flex items-center gap-1 h-7 px-2.5 rounded text-xs border border-border bg-muted/40 text-muted-foreground">
                   Role <span className="font-semibold text-foreground font-mono">postgres</span>
                 </div>
 
@@ -580,19 +580,19 @@ export default function TableEditorPage() {
               <div className="flex-1 overflow-auto p-4 space-y-4 bg-background">
                 {/* Table Summary Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                  <div className="p-3 rounded-lg border border-border bg-card">
                     <div className="text-[11px] text-muted-foreground">Table Name</div>
-                    <div className="text-sm font-semibold font-mono text-emerald-400 mt-0.5">{schema}.{activeTable}</div>
+                    <div className="text-sm font-semibold font-mono text-emerald-500 mt-0.5">{schema}.{activeTable}</div>
                   </div>
-                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                  <div className="p-3 rounded-lg border border-border bg-card">
                     <div className="text-[11px] text-muted-foreground">Columns</div>
                     <div className="text-sm font-semibold font-mono text-foreground mt-0.5">{columns.length} columns</div>
                   </div>
-                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                  <div className="p-3 rounded-lg border border-border bg-card">
                     <div className="text-[11px] text-muted-foreground">Live Rows</div>
                     <div className="text-sm font-semibold font-mono text-foreground mt-0.5">{total} records</div>
                   </div>
-                  <div className="p-3 rounded-lg border border-border bg-[#181818]">
+                  <div className="p-3 rounded-lg border border-border bg-card">
                     <div className="text-[11px] text-muted-foreground">Disk Size</div>
                     <div className="text-sm font-semibold font-mono text-foreground mt-0.5">
                       {activeTableSummary?.sizeBytes ? `${(activeTableSummary.sizeBytes / 1024).toFixed(1)} KB` : '8.0 KB'}
@@ -603,7 +603,7 @@ export default function TableEditorPage() {
                 {/* Definition Header */}
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex items-center gap-2">
-                    <Columns className="h-4 w-4 text-emerald-400" />
+                    <Columns className="h-4 w-4 text-emerald-500" />
                     <h3 className="text-sm font-semibold text-foreground">Column Definitions</h3>
                   </div>
                   <div className="flex items-center gap-2">
@@ -611,16 +611,16 @@ export default function TableEditorPage() {
                       variant="outline"
                       size="sm"
                       onClick={copyTableDdl}
-                      className="h-7 gap-1.5 text-xs border-border bg-[#181818]"
+                      className="h-7 gap-1.5 text-xs border-border bg-background hover:bg-muted"
                     >
-                      {copiedDdl ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                      {copiedDdl ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
                       <span>{copiedDdl ? 'Copied DDL' : 'Copy DDL'}</span>
                     </Button>
                     <Button
                       variant="destructive"
                       size="sm"
                       onClick={() => setDropTableTarget(activeTable)}
-                      className="h-7 gap-1.5 text-xs bg-red-600/90 hover:bg-red-600"
+                      className="h-7 gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white"
                     >
                       <Trash2 className="h-3 w-3" />
                       <span>Drop Table</span>
@@ -629,9 +629,9 @@ export default function TableEditorPage() {
                 </div>
 
                 {/* Columns Table */}
-                <div className="rounded-md border border-border overflow-hidden bg-[#181818]">
+                <div className="rounded-md border border-border overflow-hidden bg-card">
                   <table className="w-full text-xs border-collapse">
-                    <thead className="bg-[#141414] border-b border-border text-muted-foreground font-medium">
+                    <thead className="bg-muted/50 border-b border-border text-muted-foreground font-medium">
                       <tr>
                         <th className="px-3 py-2 text-left">Column</th>
                         <th className="px-3 py-2 text-left">Type</th>
@@ -642,13 +642,13 @@ export default function TableEditorPage() {
                     </thead>
                     <tbody className="divide-y divide-border/60">
                       {columns.map((col) => (
-                        <tr key={col.name} className="hover:bg-white/[0.02] transition-colors">
+                        <tr key={col.name} className="hover:bg-muted/30 transition-colors">
                           <td className="px-3 py-2 font-mono font-medium text-foreground flex items-center gap-2">
-                            {col.isPrimary && <Key className="h-3 w-3 text-amber-400" />}
+                            {col.isPrimary && <Key className="h-3 w-3 text-amber-500" />}
                             <span>{col.name}</span>
                           </td>
                           <td className="px-3 py-2">
-                            <span className="font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[11px]">
+                            <span className="font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[11px]">
                               {col.dataType}
                             </span>
                           </td>
@@ -659,12 +659,12 @@ export default function TableEditorPage() {
                             {col.isNullable ? (
                               <span className="text-muted-foreground">Nullable</span>
                             ) : (
-                              <span className="text-amber-400 font-semibold">NOT NULL</span>
+                              <span className="text-amber-500 font-semibold">NOT NULL</span>
                             )}
                           </td>
                           <td className="px-3 py-2">
                             {col.isPrimary ? (
-                              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold text-[10px]">
+                              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-500 font-bold text-[10px]">
                                 PRIMARY KEY
                               </span>
                             ) : (
@@ -683,14 +683,14 @@ export default function TableEditorPage() {
                 {gridError ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center text-sm text-muted-foreground">
-                      <p className="text-red-400 font-medium">Error loading data</p>
+                      <p className="text-red-500 font-medium">Error loading data</p>
                       <p className="mt-1">{gridError}</p>
                       <Button size="sm" className="mt-3" onClick={() => loadTableData(activeTable, page)}>Retry</Button>
                     </div>
                   </div>
                 ) : (
                   <table className="w-full text-xs border-collapse min-w-max">
-                    <thead className="sticky top-0 z-10 bg-[#181818]">
+                    <thead className="sticky top-0 z-10 bg-muted/50">
                       <tr className="border-b border-border">
                         {/* Checkbox col */}
                         <th className="w-10 px-3 py-2 text-left border-r border-border">
@@ -705,7 +705,7 @@ export default function TableEditorPage() {
                           <th
                             key={col.name}
                             onClick={() => handleSort(col.name)}
-                            className="px-3 py-2 text-left font-medium text-muted-foreground border-r border-border whitespace-nowrap min-w-[140px] group hover:bg-white/5 cursor-pointer select-none"
+                            className="px-3 py-2 text-left font-medium text-muted-foreground border-r border-border whitespace-nowrap min-w-[140px] group hover:bg-muted/80 cursor-pointer select-none"
                           >
                             <div className="flex items-center gap-2">
                               {col.isPrimary && (
@@ -806,7 +806,7 @@ export default function TableEditorPage() {
             )}
 
             {/* ── Bottom Bar (Data / Definition + Pagination) ─── */}
-            <div className="flex h-9 shrink-0 items-center justify-between border-t border-border bg-[#181818] px-3">
+            <div className="flex h-9 shrink-0 items-center justify-between border-t border-border bg-muted/40 px-3">
               {/* Tabs: Data / Definition */}
               <div className="flex items-center gap-1">
                 {(['data', 'definition'] as const).map((tab) => (
@@ -891,9 +891,9 @@ export default function TableEditorPage() {
 
       {/* ── Delete Rows Confirmation Dialog ───────────────────── */}
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <DialogContent className="max-w-md bg-[#1c1c1c] text-foreground border-border">
+        <DialogContent className="max-w-md bg-card text-foreground border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-red-400">
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-destructive">
               <AlertTriangle className="h-4 w-4" />
               Delete {selected.size} record{selected.size > 1 ? 's' : ''}
             </DialogTitle>
@@ -927,9 +927,9 @@ export default function TableEditorPage() {
 
       {/* ── Drop Table Confirmation Dialog ─────────────────────── */}
       <Dialog open={!!dropTableTarget} onOpenChange={(open) => !open && setDropTableTarget(null)}>
-        <DialogContent className="max-w-md bg-[#1c1c1c] text-foreground border-border">
+        <DialogContent className="max-w-md bg-card text-foreground border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-red-400">
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-destructive">
               <AlertTriangle className="h-4 w-4" />
               Drop Table &ldquo;{dropTableTarget}&rdquo;
             </DialogTitle>
