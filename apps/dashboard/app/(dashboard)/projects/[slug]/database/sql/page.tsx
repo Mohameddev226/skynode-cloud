@@ -73,6 +73,14 @@ interface SavedQuery {
   updatedAt: number;
 }
 
+interface HistoryItem {
+  id: string;
+  sql: string;
+  executedAt: number;
+  rowCount: number;
+  durationMs: number;
+}
+
 const TEMPLATES: { id: string; name: string; sql: string }[] = [
   {
     id: 'user-growth',
@@ -219,6 +227,41 @@ export default function SqlEditorPage() {
   const [queryError, setQueryError] = React.useState<QueryError | null>(null);
   const [status, setStatus] = React.useState<'idle' | 'running' | 'success' | 'error'>('idle');
   const [copiedCsv, setCopiedCsv] = React.useState(false);
+
+  // Execution history state
+  const historyStorageKey = `skynode_query_history_${slug}`;
+  const [queryHistory, setQueryHistory] = React.useState<HistoryItem[]>([]);
+
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem(historyStorageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setQueryHistory(parsed);
+        }
+      }
+    } catch {}
+  }, [historyStorageKey]);
+
+  function saveHistoryItem(sql: string, rowCount: number, durationMs: number) {
+    try {
+      const item: HistoryItem = {
+        id: `h-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        sql,
+        executedAt: Date.now(),
+        rowCount,
+        durationMs,
+      };
+      setQueryHistory((prev) => {
+        const next = [item, ...prev].slice(0, 50);
+        try {
+          localStorage.setItem(historyStorageKey, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    } catch {}
+  }
 
   // Persist queries to localStorage
   const saveQueriesToStorage = React.useCallback(
@@ -383,6 +426,8 @@ export default function SqlEditorPage() {
       const data = (res.data as any)?.data ?? res.data;
       setResult(data ?? null);
       setStatus('success');
+      // Save to query execution history
+      saveHistoryItem(sqlToExecute, data?.rowCount ?? 0, data?.executionTimeMs ?? 0);
       // Auto-save query on successful run
       handleSaveQuery();
     }
@@ -406,6 +451,46 @@ export default function SqlEditorPage() {
   );
   const favoriteQueries = filteredQueries.filter((q) => q.isFavorite);
   const privateQueries = filteredQueries.filter((q) => q.folder === 'private');
+
+  // Helper to trigger file downloads
+  function downloadFile(content: string, filename: string, type: string) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Export CSV
+  function exportCsv() {
+    if (!result) return;
+    const header = result.columns.join(',');
+    const rows = result.rows.map((row) =>
+      result.columns
+        .map((col) => {
+          const val = row[col];
+          if (val === null || val === undefined) return '';
+          const s = String(val);
+          return s.includes(',') || s.includes('"') || s.includes('\n')
+            ? `"${s.replace(/"/g, '""')}"`
+            : s;
+        })
+        .join(',')
+    );
+    const csv = [header, ...rows].join('\n');
+    downloadFile(csv, `query_export_${Date.now()}.csv`, 'text/csv');
+  }
+
+  // Export JSON
+  function exportJson() {
+    if (!result) return;
+    const json = JSON.stringify(result.rows, null, 2);
+    downloadFile(json, `query_export_${Date.now()}.json`, 'application/json');
+  }
 
   // Copy CSV
   async function copyCsv() {
@@ -777,24 +862,56 @@ export default function SqlEditorPage() {
                 )}
               </div>
 
-              {/* 4. LOGS */}
+              {/* 4. LOGS & HISTORY */}
               <div>
                 <button
                   onClick={() =>
                     setCollapsedGroups((prev) => ({ ...prev, logs: !prev.logs }))
                   }
-                  className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider hover:text-foreground transition-colors"
+                  className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider hover:text-foreground transition-colors"
                 >
-                  {collapsedGroups.logs ? (
-                    <ChevronRight className="h-3 w-3" />
-                  ) : (
-                    <ChevronDown className="h-3 w-3" />
+                  <div className="flex items-center gap-1.5">
+                    {collapsedGroups.logs ? (
+                      <ChevronRight className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )}
+                    <span>HISTORY / LOGS</span>
+                  </div>
+                  {queryHistory.length > 0 && (
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      ({queryHistory.length})
+                    </span>
                   )}
-                  <span>LOGS</span>
                 </button>
                 {!collapsedGroups.logs && (
-                  <div className="pl-4 py-1 text-[11px] text-muted-foreground/50 italic">
-                    No query logs
+                  <div className="space-y-0.5 pl-2 mt-1">
+                    {queryHistory.length === 0 ? (
+                      <div className="pl-2 py-1 text-[11px] text-muted-foreground/50 italic">
+                        No query history yet
+                      </div>
+                    ) : (
+                      queryHistory.slice(0, 15).map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            setSqlCode(item.sql);
+                          }}
+                          className="group flex flex-col p-1.5 rounded hover:bg-muted/60 cursor-pointer transition-colors"
+                          title="Click to load into editor"
+                        >
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span className="font-mono text-emerald-500 font-semibold">
+                              {item.rowCount} rows · {item.durationMs}ms
+                            </span>
+                            <span>{new Date(item.executedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                          </div>
+                          <span className="font-mono text-[11px] text-foreground/80 truncate mt-0.5">
+                            {item.sql.replace(/\s+/g, ' ').slice(0, 50)}
+                          </span>
+                        </div>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
@@ -938,6 +1055,24 @@ export default function SqlEditorPage() {
                     >
                       {copiedCsv ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                       CSV
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={exportCsv}
+                      className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground border-border"
+                      title="Download as CSV file"
+                    >
+                      ⬇ CSV
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={exportJson}
+                      className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground border-border"
+                      title="Download as JSON file"
+                    >
+                      ⬇ JSON
                     </Button>
                   </div>
                 )}

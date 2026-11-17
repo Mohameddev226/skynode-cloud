@@ -140,6 +140,11 @@ export default function TableEditorPage() {
   /* copied state */
   const [copiedDdl, setCopiedDdl] = React.useState(false);
 
+  /* inline editing */
+  const [editingCell, setEditingCell] = React.useState<{ rowIndex: number; colName: string } | null>(null);
+  const [editValue, setEditValue] = React.useState<string>('');
+  const [savingCell, setSavingCell] = React.useState(false);
+
   /* load table list */
   async function loadTables(targetSchema = schema) {
     setTablesLoading(true);
@@ -264,6 +269,70 @@ export default function TableEditorPage() {
     }
     return result;
   }, [rows, filterText, sortCol, sortDir]);
+
+  /* inline cell edit handlers */
+  function startEditing(rowIndex: number, col: ColumnInfo, val: unknown) {
+    if (col.isPrimary) return;
+    setEditingCell({ rowIndex, colName: col.name });
+    setEditValue(val === null || val === undefined ? '' : String(val));
+  }
+
+  async function saveCellEdit(rowIndex: number, col: ColumnInfo) {
+    if (!editingCell || !activeTable) return;
+    const originalRow = displayedRows[rowIndex];
+    if (!originalRow) {
+      setEditingCell(null);
+      return;
+    }
+    const pkCol = columns.find((c) => c.isPrimary)?.name || 'id';
+    const pkVal = (originalRow as any)[pkCol];
+    if (pkVal === undefined) {
+      setEditingCell(null);
+      return;
+    }
+
+    const originalVal = originalRow[col.name];
+    const originalStr = originalVal === null || originalVal === undefined ? '' : String(originalVal);
+    if (editValue === originalStr) {
+      setEditingCell(null);
+      return;
+    }
+
+    let parsedValue: any = editValue;
+    if (col.isNullable && editValue.trim() === '') {
+      parsedValue = null;
+    } else if (
+      col.dataType.includes('int') ||
+      col.dataType.includes('numeric') ||
+      col.dataType.includes('float') ||
+      col.dataType.includes('real') ||
+      col.dataType.includes('double')
+    ) {
+      if (editValue.trim() !== '') {
+        parsedValue = Number(editValue);
+      }
+    } else if (col.dataType.includes('bool')) {
+      parsedValue = editValue.toLowerCase() === 'true' || editValue === '1';
+    }
+
+    setSavingCell(true);
+    try {
+      const res = await api.patch(
+        `/api/v1/projects/${slug}/database/tables/${activeTable}/records/${encodeURIComponent(String(pkVal))}?pk=${pkCol}&schema=${schema}`,
+        { [col.name]: parsedValue }
+      );
+      if (res.success) {
+        loadTableData(activeTable, page);
+      } else {
+        alert(res.error?.message ?? 'Failed to update record');
+      }
+    } catch (err: any) {
+      alert(err?.message ?? 'Failed to update record');
+    } finally {
+      setSavingCell(false);
+      setEditingCell(null);
+    }
+  }
 
   /* delete selected rows */
   async function handleDeleteSelectedRows() {
@@ -765,31 +834,71 @@ export default function TableEditorPage() {
                             )}
                           >
                             <td className="w-10 px-3 py-1.5 border-r border-border/50">
-                              <input
-                                type="checkbox"
-                                checked={selected.has(i)}
-                                onChange={() => toggleRow(i)}
-                                className="h-3.5 w-3.5 rounded accent-emerald-500"
-                              />
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(i)}
+                                  onChange={() => toggleRow(i)}
+                                  className="h-3.5 w-3.5 rounded accent-emerald-500"
+                                />
+                                {columns.some((c) => !c.isPrimary) && (
+                                  <button
+                                    onClick={() => {
+                                      const editableCol = columns.find((c) => !c.isPrimary);
+                                      if (editableCol) startEditing(i, editableCol, row[editableCol.name]);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-emerald-500 transition-opacity"
+                                    title="Edit row"
+                                  >
+                                    <Pencil className="h-2.5 w-2.5" />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             {columns.map((col) => {
                               const val = row[col.name];
                               const str = cellStr(val);
                               const isNull = val === null || val === undefined;
+                              const isEditing = editingCell?.rowIndex === i && editingCell?.colName === col.name;
+
                               return (
                                 <td
                                   key={col.name}
-                                  className="px-3 py-1.5 border-r border-border/50 whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis"
+                                  onDoubleClick={() => startEditing(i, col, val)}
+                                  className={cn(
+                                    'px-3 py-1.5 border-r border-border/50 whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis transition-colors',
+                                    !col.isPrimary && 'cursor-cell hover:bg-emerald-500/5',
+                                    isEditing && 'p-0 bg-emerald-500/10'
+                                  )}
+                                  title={!col.isPrimary ? 'Double-click to edit' : undefined}
                                 >
-                                  {isNull ? (
+                                  {isEditing ? (
+                                    <input
+                                      autoFocus
+                                      disabled={savingCell}
+                                      value={editValue}
+                                      onChange={(e) => setEditValue(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          saveCellEdit(i, col);
+                                        } else if (e.key === 'Escape') {
+                                          setEditingCell(null);
+                                        }
+                                      }}
+                                      onBlur={() => saveCellEdit(i, col)}
+                                      className="w-full h-full px-3 py-1 font-mono text-xs bg-background border-2 border-emerald-500 rounded-none outline-none text-foreground shadow-inner"
+                                    />
+                                  ) : isNull ? (
                                     <span className="text-muted-foreground/40 italic text-[11px]">NULL</span>
                                   ) : (
-                                    <span className={cn(
-                                      'font-mono',
-                                      col.isPrimary ? 'text-amber-400/90' : 'text-foreground',
-                                      typeof val === 'boolean' ? 'text-purple-400 font-semibold' : '',
-                                      typeof val === 'number' ? 'text-blue-400' : '',
-                                    )}>
+                                    <span
+                                      className={cn(
+                                        'font-mono',
+                                        col.isPrimary ? 'text-amber-400/90' : 'text-foreground',
+                                        typeof val === 'boolean' ? 'text-purple-400 font-semibold' : '',
+                                        typeof val === 'number' ? 'text-blue-400' : ''
+                                      )}
+                                    >
                                       {str.length > 60 ? str.slice(0, 60) + '…' : str}
                                     </span>
                                   )}

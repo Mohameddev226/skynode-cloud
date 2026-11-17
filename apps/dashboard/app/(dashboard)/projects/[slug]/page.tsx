@@ -11,6 +11,7 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
+  Table2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -75,6 +76,11 @@ export default function ProjectOverviewPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Live metrics from database tables
+  const [tableCount, setTableCount] = React.useState<number | null>(null);
+  const [storageKb, setStorageKb] = React.useState<number | null>(null);
+  const [recentTables, setRecentTables] = React.useState<{ name: string; rowCount?: number }[]>([]);
+
   async function fetchProject() {
     setLoading(true);
     setError(null);
@@ -87,7 +93,21 @@ export default function ProjectOverviewPage() {
     setLoading(false);
   }
 
-  React.useEffect(() => { fetchProject(); }, [slug]);
+  React.useEffect(() => {
+    fetchProject();
+  }, [slug]);
+
+  React.useEffect(() => {
+    api.get<any>(`/api/v1/projects/${slug}/database/tables`).then((res) => {
+      if (res.success && res.data) {
+        const tables = Array.isArray(res.data) ? res.data : (res.data as any).data ?? [];
+        setTableCount(tables.length);
+        const totalBytes = tables.reduce((sum: number, t: any) => sum + (t.sizeBytes ?? 0), 0);
+        setStorageKb(totalBytes / 1024);
+        setRecentTables(tables.slice(0, 6));
+      }
+    });
+  }, [slug]);
 
   if (loading) {
     return (
@@ -146,7 +166,9 @@ export default function ProjectOverviewPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Database</p>
-              <p className="text-sm font-semibold truncate max-w-[140px]">{project.databaseName ?? 'Provisioned'}</p>
+              <p className="text-sm font-semibold truncate max-w-[140px]">
+                {tableCount !== null ? `${tableCount} tables` : (project.databaseName ?? 'Provisioned')}
+              </p>
             </div>
           </div>
         </Card>
@@ -168,7 +190,13 @@ export default function ProjectOverviewPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Storage</p>
-              <p className="text-sm font-semibold">S3 / MinIO Active</p>
+              <p className="text-sm font-semibold">
+                {storageKb !== null
+                  ? storageKb > 1024
+                    ? `${(storageKb / 1024).toFixed(1)} MB used`
+                    : `${storageKb.toFixed(1)} KB used`
+                  : 'S3 / MinIO Active'}
+              </p>
             </div>
           </div>
         </Card>
@@ -209,15 +237,44 @@ export default function ProjectOverviewPage() {
         </div>
       </div>
 
-      {/* Activity placeholder */}
+      {/* Recent Tables & Quick Access */}
       <div>
-        <h2 className="mb-3 text-sm font-medium text-muted-foreground uppercase tracking-wider">Recent Activity</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+            Tables ({tableCount ?? 0})
+          </h2>
+          <Link
+            href={`/projects/${slug}/database`}
+            className="text-xs text-emerald-500 hover:text-emerald-400 font-medium"
+          >
+            Open Table Editor →
+          </Link>
+        </div>
         <Card>
-          <CardContent className="flex items-center gap-3 py-5">
-            <Activity className="h-5 w-5 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">
-              Activity logs will appear here once the project is active and receiving traffic.
-            </p>
+          <CardContent className="p-0 divide-y divide-border">
+            {recentTables.length === 0 ? (
+              <div className="p-6 text-center text-xs text-muted-foreground">
+                No tables created yet. Click Table Editor to create your first table.
+              </div>
+            ) : (
+              recentTables.map((t) => (
+                <div
+                  key={t.name}
+                  className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/40 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 text-xs font-mono">
+                    <Table2 className="h-3.5 w-3.5 text-emerald-500" />
+                    <span className="font-semibold text-foreground">{t.name}</span>
+                  </div>
+                  <Link
+                    href={`/projects/${slug}/database`}
+                    className="text-xs text-muted-foreground hover:text-emerald-500 transition-colors"
+                  >
+                    View rows →
+                  </Link>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
       </div>
