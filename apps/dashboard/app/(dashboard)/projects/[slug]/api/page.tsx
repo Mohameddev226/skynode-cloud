@@ -2,7 +2,21 @@
 
 import * as React from 'react';
 import { useParams } from 'next/navigation';
-import { Zap, Key, Plus, Copy, Eye, EyeOff, RefreshCw, ExternalLink } from 'lucide-react';
+import {
+  Zap,
+  Key,
+  Plus,
+  Copy,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  ExternalLink,
+  Play,
+  ChevronDown,
+  ChevronRight,
+  Table2,
+  Globe,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,28 +44,89 @@ interface ProjectApiConfig {
   serviceKey: string;
 }
 
+interface TableInfo {
+  name: string;
+  schema: string;
+  rowCount: number;
+}
+
+const METHOD_COLORS: Record<string, string> = {
+  GET: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+  POST: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
+  PATCH: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+  DELETE: 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20',
+};
+
+interface EndpointGroup {
+  table: string;
+  endpoints: { method: string; path: string; description: string }[];
+}
+
+function buildEndpoints(baseUrl: string, tables: TableInfo[]): EndpointGroup[] {
+  return tables.map((t) => ({
+    table: t.name,
+    endpoints: [
+      {
+        method: 'GET',
+        path: `${baseUrl}/rest/v1/${t.name}`,
+        description: `List rows from ${t.name} with filter, order, pagination`,
+      },
+      {
+        method: 'GET',
+        path: `${baseUrl}/rest/v1/${t.name}/:id`,
+        description: `Get a single row by primary key`,
+      },
+      {
+        method: 'POST',
+        path: `${baseUrl}/rest/v1/${t.name}`,
+        description: `Insert one or more rows into ${t.name}`,
+      },
+      {
+        method: 'PATCH',
+        path: `${baseUrl}/rest/v1/${t.name}/:id`,
+        description: `Update a row by primary key`,
+      },
+      {
+        method: 'DELETE',
+        path: `${baseUrl}/rest/v1/${t.name}/:id`,
+        description: `Delete a row by primary key`,
+      },
+    ],
+  }));
+}
+
 export default function ApiPage() {
   const params = useParams();
   const slug = params.slug as string;
 
   const [apiKeys, setApiKeys] = React.useState<ApiKey[]>([]);
   const [config, setConfig] = React.useState<ProjectApiConfig | null>(null);
+  const [tables, setTables] = React.useState<TableInfo[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [showServiceKey, setShowServiceKey] = React.useState(false);
   const [copied, setCopied] = React.useState<string | null>(null);
+  const [expandedTable, setExpandedTable] = React.useState<string | null>(null);
+
+  // Test panel
+  const [testUrl, setTestUrl] = React.useState('');
+  const [testResult, setTestResult] = React.useState<string | null>(null);
+  const [testLoading, setTestLoading] = React.useState(false);
 
   async function fetchData() {
     setLoading(true);
     setError(null);
-    const [keysRes, configRes] = await Promise.all([
+    const [keysRes, configRes, tablesRes] = await Promise.all([
       api.get<ApiKey[]>(`/api/v1/projects/${slug}/api/keys`),
       api.get<ProjectApiConfig>(`/api/v1/projects/${slug}/api/config`),
+      api.get<{ tables: TableInfo[] }>(`/api/v1/projects/${slug}/database/tables`),
     ]);
-    if (!keysRes.success) setError(keysRes.error?.message ?? 'Failed to load API config');
-    else {
+    if (!keysRes.success) {
+      setError(keysRes.error?.message ?? 'Failed to load API config');
+    } else {
       setApiKeys(keysRes.data ?? []);
       setConfig(configRes.data ?? null);
+      setTables(tablesRes.data?.tables ?? []);
     }
     setLoading(false);
   }
@@ -64,6 +139,22 @@ export default function ApiPage() {
     setTimeout(() => setCopied(null), 2000);
   }
 
+  async function runTestRequest(url: string) {
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const json = await res.json();
+      setTestResult(JSON.stringify(json, null, 2));
+    } catch (e: any) {
+      setTestResult(`Error: ${e.message}`);
+    }
+    setTestLoading(false);
+  }
+
   if (loading) return (
     <div className="space-y-6">
       <LoadingSkeleton className="h-8 w-32" />
@@ -73,13 +164,15 @@ export default function ApiPage() {
   );
   if (error) return <ErrorState message={error} onRetry={fetchData} />;
 
+  const endpointGroups = config ? buildEndpoints(config.baseUrl, tables) : [];
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">API</h1>
-          <p className="text-sm text-muted-foreground">REST API endpoints and credentials</p>
+          <h1 className="text-2xl font-bold tracking-tight">API Docs & Keys</h1>
+          <p className="text-sm text-muted-foreground">REST API endpoints and credentials for this project</p>
         </div>
         <Button variant="outline" size="icon" onClick={fetchData} title="Refresh">
           <RefreshCw className="h-4 w-4" />
@@ -89,10 +182,16 @@ export default function ApiPage() {
       <Tabs defaultValue="credentials">
         <TabsList>
           <TabsTrigger value="credentials">Credentials</TabsTrigger>
+          <TabsTrigger value="explorer">
+            Explorer
+            {tables.length > 0 && (
+              <Badge variant="secondary" className="ml-1.5 text-xs">{tables.length}</Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="keys">API Keys</TabsTrigger>
-          <TabsTrigger value="explorer">Explorer</TabsTrigger>
         </TabsList>
 
+        {/* ── Credentials ───────────────────────────────────────── */}
         <TabsContent value="credentials" className="space-y-4">
           {config ? (
             <Card>
@@ -160,8 +259,129 @@ export default function ApiPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Quick start code snippet */}
+          {config && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Quick start</CardTitle>
+                <CardDescription>Fetch data from your REST API</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <pre className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+{`// JavaScript / TypeScript
+const res = await fetch(
+  '${config.baseUrl}/rest/v1/${tables[0]?.name ?? 'your_table'}?limit=10',
+  { headers: { 'apikey': '${config.anonKey}' } }
+);
+const { data } = await res.json();`}
+                </pre>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
+        {/* ── Explorer ───────────────────────────────────────────── */}
+        <TabsContent value="explorer" className="space-y-4">
+          {tables.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center space-y-2">
+                <Table2 className="h-8 w-8 text-muted-foreground/40 mx-auto" />
+                <p className="text-sm text-muted-foreground">No tables found. Create tables in the Table Editor first.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Quick test */}
+              {config && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Play className="h-4 w-4 text-emerald-500" />
+                      Quick test
+                    </CardTitle>
+                    <CardDescription>Send a GET request to any REST endpoint</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex gap-2">
+                      <Input
+                        value={testUrl}
+                        onChange={(e) => setTestUrl(e.target.value)}
+                        placeholder={`${config.baseUrl}/rest/v1/${tables[0]?.name ?? 'table'}?limit=5`}
+                        className="font-mono text-xs"
+                        onKeyDown={(e) => e.key === 'Enter' && testUrl && runTestRequest(testUrl)}
+                      />
+                      <Button
+                        onClick={() => testUrl && runTestRequest(testUrl)}
+                        disabled={!testUrl || testLoading}
+                        className="shrink-0"
+                      >
+                        {testLoading ? 'Loading...' : 'Run'}
+                      </Button>
+                    </div>
+                    {testResult && (
+                      <pre className="bg-muted rounded-md p-3 text-xs font-mono overflow-auto max-h-48 whitespace-pre-wrap">
+                        {testResult}
+                      </pre>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Endpoints per table */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm font-medium">{endpointGroups.length} table{endpointGroups.length !== 1 ? 's' : ''} · {endpointGroups.length * 5} endpoints</p>
+                </div>
+                {endpointGroups.map((group) => (
+                  <Card key={group.table} className="overflow-hidden">
+                    <button
+                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors text-left"
+                      onClick={() => setExpandedTable(expandedTable === group.table ? null : group.table)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Table2 className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-sm font-mono font-medium">{group.table}</span>
+                        <Badge variant="outline" className="text-xs">{group.endpoints.length} endpoints</Badge>
+                      </div>
+                      {expandedTable === group.table ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
+                    {expandedTable === group.table && (
+                      <div className="border-t border-border divide-y divide-border">
+                        {group.endpoints.map((ep) => (
+                          <div key={`${ep.method}-${ep.path}`} className="flex items-start gap-3 px-4 py-2.5 group hover:bg-muted/30">
+                            <span className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded border shrink-0 mt-0.5 ${METHOD_COLORS[ep.method]}`}>
+                              {ep.method}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-mono break-all text-foreground/80">{ep.path}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">{ep.description}</p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 opacity-0 group-hover:opacity-100 shrink-0"
+                              onClick={() => copyToClipboard(ep.path, ep.path)}
+                            >
+                              <Copy className={`h-3 w-3 ${copied === ep.path ? 'text-green-500' : ''}`} />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* ── API Keys ───────────────────────────────────────────── */}
         <TabsContent value="keys" className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Create scoped API keys for specific use cases.</p>
@@ -208,23 +428,6 @@ export default function ApiPage() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        <TabsContent value="explorer">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">API Explorer</CardTitle>
-              <CardDescription>Browse and test your auto-generated REST endpoints.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border border-border bg-muted/40 px-4 py-6 text-center space-y-2">
-                <Zap className="h-8 w-8 text-muted-foreground/40 mx-auto" />
-                <p className="text-sm text-muted-foreground">
-                  API Explorer is available after creating database tables and running the provisioning engine.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

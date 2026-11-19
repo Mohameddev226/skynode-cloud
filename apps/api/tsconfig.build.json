@@ -5,7 +5,7 @@
     "removeComments": true,
     "allowSyntheticDefaultImports": true,
     "sourceMap": true,
-    "incremental": true
+    "incremental": false
   },
   "exclude": [
     "node_modules",

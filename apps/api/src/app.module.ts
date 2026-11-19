@@ -13,6 +13,8 @@ import { AppAuthModule } from './app-auth/app-auth.module';
 import { StorageModule } from './storage/storage.module';
 import { AuditModule } from './audit/audit.module';
 import { BootstrapModule } from './bootstrap/bootstrap.module';
+import { RealtimeModule } from './realtime/realtime.module';
+import { ApiGatewayModule } from './api-gateway/api-gateway.module';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import redisConfig from './config/redis.config';
@@ -60,6 +62,8 @@ import minioConfig from './config/minio.config';
     StorageModule,
     AuditModule,
     BootstrapModule,
+    RealtimeModule,
+    ApiGatewayModule,
   ],
   providers: [
     {

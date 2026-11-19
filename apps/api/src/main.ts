@@ -37,7 +37,16 @@ async function bootstrap() {
     origin: corsOrigins.split(',').map((o) => o.trim()),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-CSRF-Token'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-ID',
+      'X-CSRF-Token',
+      'apikey',
+      'Range',
+      'Prefer',
+      'x-client-info',
+    ],
   });
 
   // ── Global prefix ──────────────────────────────────────────

@@ -355,6 +355,35 @@ export class ProjectsService {
   }
 
   /**
+   * Get database credentials for a project by ref or slug (for REST API / Realtime).
+   */
+  async getProjectCredentialsByRef(identifier: string) {
+    const projectRecord = await this.prisma.project.findFirst({
+      where: {
+        status: { not: 'DELETED' },
+        OR: getProjectOrConditions(identifier),
+      },
+    });
+
+    if (!projectRecord) {
+      throw new NotFoundException(`Project "${identifier}" not found`);
+    }
+
+    const passwordPlain = decrypt(projectRecord.dbPasswordEnc);
+    return {
+      id: projectRecord.id,
+      ref: projectRecord.ref,
+      slug: projectRecord.slug,
+      name: projectRecord.name,
+      host: projectRecord.dbHost,
+      port: projectRecord.dbPort,
+      database: projectRecord.dbName,
+      user: projectRecord.dbUser,
+      password: passwordPlain,
+    };
+  }
+
+  /**
    * Create an additional scoped API key.
    */
   async createApiKey(identifier: string, ownerId: string, dto: CreateProjectApiKeyDto) {
