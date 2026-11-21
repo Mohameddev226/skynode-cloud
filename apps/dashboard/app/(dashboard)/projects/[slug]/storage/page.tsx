@@ -16,6 +16,10 @@ import {
   X,
   Database,
   Layers,
+  Copy,
+  Check,
+  Image as ImageIcon,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -199,6 +203,26 @@ export default function StoragePage() {
     } finally {
       setUploadLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
+
+  async function handleCopyUrl(key: string) {
+    if (!selectedBucket) return;
+    try {
+      const res = await api.get<{ downloadUrl: string }>(
+        `/api/v1/projects/${slug}/storage/buckets/${selectedBucket}/download-url?key=${encodeURIComponent(key)}`
+      );
+      if (res.success && res.data?.downloadUrl) {
+        await navigator.clipboard.writeText(res.data.downloadUrl);
+        setCopiedKey(key);
+        setTimeout(() => setCopiedKey(null), 2000);
+      } else {
+        alert('Failed to get download URL');
+      }
+    } catch {
+      alert('Failed to copy URL');
     }
   }
 
@@ -439,42 +463,69 @@ export default function StoragePage() {
                 </div>
               ) : (
                 <div className="divide-y divide-border">
-                  {files.map((file) => (
-                    <div
-                      key={file.key}
-                      className="flex items-center justify-between py-2.5 px-1 hover:bg-muted/40 transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate max-w-xs">{file.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatBytes(file.size)} • {formatRelativeTime(file.lastModified)}
-                          </p>
+                  {files.map((file) => {
+                    const isImg = /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(file.name);
+                    const isCopied = copiedKey === file.key;
+
+                    return (
+                      <div
+                        key={file.key}
+                        className="flex items-center justify-between py-2.5 px-2 rounded-md hover:bg-muted/40 transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {isImg ? (
+                            <div className="p-1 rounded bg-emerald-500/10 text-emerald-500 shrink-0">
+                              <ImageIcon className="h-4 w-4" />
+                            </div>
+                          ) : (
+                            <div className="p-1 rounded bg-muted text-muted-foreground shrink-0">
+                              <FileText className="h-4 w-4" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate max-w-xs">{file.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatBytes(file.size)} • {formatRelativeTime(file.lastModified)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs gap-1"
+                            onClick={() => handleCopyUrl(file.key)}
+                            title="Copy download / public URL"
+                          >
+                            {isCopied ? (
+                              <Check className="h-3.5 w-3.5 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" />
+                            )}
+                            <span className="hidden sm:inline">{isCopied ? 'Copied' : 'Copy URL'}</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2"
+                            onClick={() => handleDownloadFile(file.key)}
+                            title="Download"
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-destructive hover:text-destructive"
+                            onClick={() => handleDeleteFile(file.key)}
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2"
-                          onClick={() => handleDownloadFile(file.key)}
-                          title="Download"
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-destructive hover:text-destructive"
-                          onClick={() => handleDeleteFile(file.key)}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
