@@ -350,4 +350,124 @@ export class DatabaseStudioService {
       }
     });
   }
+
+  async addColumn(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    dto: { name: string; type: string; nullable?: boolean; defaultValue?: string },
+  ): Promise<void> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const safeCol = this.sanitizeIdentifier(dto.name);
+    if (!/^[a-zA-Z0-9_(),\s]+$/.test(dto.type)) {
+      throw new BadRequestException('Invalid data type');
+    }
+    const nullable = dto.nullable !== false;
+    const nullClause = nullable ? '' : ' NOT NULL';
+    const defaultClause = dto.defaultValue ? ` DEFAULT ${dto.defaultValue}` : '';
+    const sql = `ALTER TABLE "${safeSchema}"."${safeTable}" ADD COLUMN "${safeCol}" ${dto.type}${nullClause}${defaultClause};`;
+
+    await this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(sql);
+    });
+  }
+
+  async dropColumn(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    columnName: string,
+  ): Promise<void> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const safeCol = this.sanitizeIdentifier(columnName);
+    const sql = `ALTER TABLE "${safeSchema}"."${safeTable}" DROP COLUMN IF EXISTS "${safeCol}";`;
+
+    await this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(sql);
+    });
+  }
+
+  async listPolicies(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+  ): Promise<any[]> {
+    const sql = `
+      SELECT
+        p.policyname AS name,
+        p.cmd AS command,
+        p.permissive,
+        p.roles,
+        p.qual AS using_expr,
+        p.with_check AS with_check_expr,
+        c.relrowsecurity AS rls_enabled
+      FROM pg_policies p
+      JOIN pg_class c ON c.relname = p.tablename AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+      WHERE p.schemaname = $1 AND p.tablename = $2
+      ORDER BY p.policyname;
+    `;
+    return this.connectionManager.withClient(credentials, async (client) => {
+      const result = await client.query(sql, [schema, table]);
+      return result.rows;
+    });
+  }
+
+  async createPolicy(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    dto: { name: string; command: string; using?: string; withCheck?: string },
+  ): Promise<void> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const safeName = dto.name.replace(/"/g, '""');
+    const allowedCmds = ['ALL', 'SELECT', 'INSERT', 'UPDATE', 'DELETE'];
+    const cmd = (dto.command || 'ALL').toUpperCase();
+    if (!allowedCmds.includes(cmd)) {
+      throw new BadRequestException(`Invalid policy command: ${dto.command}`);
+    }
+
+    let sql = `CREATE POLICY "${safeName}" ON "${safeSchema}"."${safeTable}" FOR ${cmd}`;
+    if (dto.using) sql += ` USING (${dto.using})`;
+    if (dto.withCheck) sql += ` WITH CHECK (${dto.withCheck})`;
+
+    await this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(sql);
+    });
+  }
+
+  async dropPolicy(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    policyName: string,
+  ): Promise<void> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const safeName = policyName.replace(/"/g, '""');
+    const sql = `DROP POLICY IF EXISTS "${safeName}" ON "${safeSchema}"."${safeTable}";`;
+
+    await this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(sql);
+    });
+  }
+
+  async setRls(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const sql = enabled
+      ? `ALTER TABLE "${safeSchema}"."${safeTable}" ENABLE ROW LEVEL SECURITY;`
+      : `ALTER TABLE "${safeSchema}"."${safeTable}" DISABLE ROW LEVEL SECURITY;`;
+
+    await this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(sql);
+    });
+  }
 }

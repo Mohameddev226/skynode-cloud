@@ -44,6 +44,8 @@ import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import { CreateTableModal } from '@/components/database/create-table-modal';
 import { InsertRowModal } from '@/components/database/insert-row-modal';
+import { AddColumnModal } from '@/components/database/add-column-modal';
+import { RlsPanel } from '@/components/database/rls-panel';
 
 /* ─── Types ────────────────────────────────────────────────── */
 interface TableInfo {
@@ -144,6 +146,23 @@ export default function TableEditorPage() {
   const [editingCell, setEditingCell] = React.useState<{ rowIndex: number; colName: string } | null>(null);
   const [editValue, setEditValue] = React.useState<string>('');
   const [savingCell, setSavingCell] = React.useState(false);
+
+  /* add column & rls */
+  const [addColumnOpen, setAddColumnOpen] = React.useState(false);
+  const [rlsOpen, setRlsOpen] = React.useState(false);
+
+  async function handleDropColumn(colName: string) {
+    if (!activeTable) return;
+    if (!confirm(`Are you sure you want to drop column "${colName}" from table "${activeTable}"?`)) return;
+    try {
+      await api.delete(
+        `/api/v1/projects/${slug}/database/tables/${activeTable}/columns/${encodeURIComponent(colName)}?schema=${schema}`
+      );
+      await loadTableData(activeTable, page);
+    } catch (err: any) {
+      alert(err?.response?.data?.message || err?.message || 'Failed to drop column');
+    }
+  }
 
   /* load table list */
   async function loadTables(targetSchema = schema) {
@@ -594,11 +613,16 @@ export default function TableEditorPage() {
                   <span>{sortCol ? `${sortCol} ${sortDir}` : 'Sort'}</span>
                 </Button>
 
-                {/* RLS policies badge */}
-                <div className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border bg-muted/30 text-muted-foreground">
+                {/* RLS policies button */}
+                <button
+                  type="button"
+                  onClick={() => setRlsOpen(true)}
+                  className="flex items-center gap-1.5 h-7 px-2 rounded text-xs font-medium border border-dashed border-border bg-muted/30 text-muted-foreground hover:text-foreground hover:border-emerald-500/50 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                  title="Configure Row Level Security (RLS) policies"
+                >
                   <Shield className="h-3 w-3 text-emerald-500" />
                   <span>RLS policies</span>
-                </div>
+                </button>
               </div>
 
               {/* Right: Actions */}
@@ -677,6 +701,23 @@ export default function TableEditorPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
+                      size="sm"
+                      onClick={() => setAddColumnOpen(true)}
+                      className="h-7 gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                    >
+                      <Plus className="h-3 w-3" />
+                      <span>Add Column</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRlsOpen(true)}
+                      className="h-7 gap-1.5 text-xs border-border bg-background hover:bg-muted"
+                    >
+                      <Shield className="h-3 w-3 text-emerald-500" />
+                      <span>RLS Policies</span>
+                    </Button>
+                    <Button
                       variant="outline"
                       size="sm"
                       onClick={copyTableDdl}
@@ -707,6 +748,7 @@ export default function TableEditorPage() {
                         <th className="px-3 py-2 text-left">Default</th>
                         <th className="px-3 py-2 text-left">Nullable</th>
                         <th className="px-3 py-2 text-left">Key</th>
+                        <th className="px-3 py-2 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/60">
@@ -738,6 +780,17 @@ export default function TableEditorPage() {
                               </span>
                             ) : (
                               <span className="text-muted-foreground/40">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {!col.isPrimary && (
+                              <button
+                                onClick={() => handleDropColumn(col.name)}
+                                className="text-muted-foreground hover:text-destructive p-1 rounded hover:bg-destructive/10 transition-colors"
+                                title={`Drop column ${col.name}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1069,6 +1122,29 @@ export default function TableEditorPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Add Column Modal ─────────────────────────────────────── */}
+      {activeTable && (
+        <AddColumnModal
+          isOpen={addColumnOpen}
+          onClose={() => setAddColumnOpen(false)}
+          projectSlug={slug}
+          tableName={activeTable}
+          schema={schema}
+          onSuccess={() => { loadTableData(activeTable, page); }}
+        />
+      )}
+
+      {/* ── RLS Policies Panel ───────────────────────────────────── */}
+      {activeTable && (
+        <RlsPanel
+          isOpen={rlsOpen}
+          onClose={() => setRlsOpen(false)}
+          projectSlug={slug}
+          tableName={activeTable}
+          schema={schema}
+        />
+      )}
 
     </div>
   );

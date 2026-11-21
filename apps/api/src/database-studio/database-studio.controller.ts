@@ -165,4 +165,90 @@ export class DatabaseStudioController {
     const result = await this.studioService.executeQuery(creds, dto.sql);
     return { data: result };
   }
+
+  @Post('tables/:tableName/columns')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a column to an existing table' })
+  async addColumn(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: { name: string; type: string; nullable?: boolean; defaultValue?: string },
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.studioService.addColumn(creds, schema, tableName, dto);
+    return { data: { message: `Column ${dto.name} added to ${tableName}` } };
+  }
+
+  @Delete('tables/:tableName/columns/:columnName')
+  @ApiOperation({ summary: 'Drop a column from a table' })
+  async dropColumn(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Param('columnName') columnName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.studioService.dropColumn(creds, schema, tableName, columnName);
+    return { data: { message: `Column ${columnName} dropped from ${tableName}` } };
+  }
+
+  @Get('tables/:tableName/policies')
+  @ApiOperation({ summary: 'List RLS policies for a table' })
+  async listPolicies(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const policies = await this.studioService.listPolicies(creds, schema, tableName);
+    return { data: policies };
+  }
+
+  @Post('tables/:tableName/policies')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create an RLS policy on a table' })
+  async createPolicy(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: { name: string; command: string; using?: string; withCheck?: string },
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.studioService.createPolicy(creds, schema, tableName, dto);
+    return { data: { message: `Policy ${dto.name} created` } };
+  }
+
+  @Delete('tables/:tableName/policies/:policyName')
+  @ApiOperation({ summary: 'Drop an RLS policy' })
+  async dropPolicy(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Param('policyName') policyName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.studioService.dropPolicy(creds, schema, tableName, policyName);
+    return { data: { message: `Policy ${policyName} dropped` } };
+  }
+
+  @Post('tables/:tableName/rls')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Enable or disable RLS on a table' })
+  async setRls(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: { enabled: boolean },
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.studioService.setRls(creds, schema, tableName, dto.enabled);
+    return { data: { message: `RLS ${dto.enabled ? 'enabled' : 'disabled'} on ${tableName}` } };
+  }
 }
