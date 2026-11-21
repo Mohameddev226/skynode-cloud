@@ -8,6 +8,7 @@ import {
   Req,
   Res,
   Param,
+  Query,
   HttpCode,
   HttpStatus,
   UseGuards,
@@ -87,6 +88,47 @@ export class AuthController {
     setSessionCookie(res, result.token, result.expiresAt);
 
     return { data: result.user };
+  }
+
+  @Get('github')
+  @ApiOperation({ summary: 'Initiate GitHub OAuth login' })
+  githubLogin(@Res() res: Response) {
+    const clientId = process.env.GITHUB_CLIENT_ID;
+    const apiUrl = process.env.API_URL || 'http://localhost:4000';
+    const redirectUri = `${apiUrl}/api/v1/auth/github/callback`;
+
+    if (!clientId) {
+      this.logger.log('GITHUB_CLIENT_ID not configured, initiating dev simulation');
+      return res.redirect(`${apiUrl}/api/v1/auth/github/callback?code=mock_github_dev`);
+    }
+
+    const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email`;
+    return res.redirect(githubAuthUrl);
+  }
+
+  @Get('github/callback')
+  @ApiOperation({ summary: 'GitHub OAuth callback' })
+  async githubCallback(
+    @Query('code') code: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+    try {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const userAgent = (req.headers['user-agent'] as string) || '';
+
+      const result = await this.authService.handleGitHubCallback(code, ip, userAgent);
+
+      setSessionCookie(res, result.token, result.expiresAt);
+
+      return res.redirect(`${dashboardUrl}/projects`);
+    } catch (err: any) {
+      this.logger.error(`GitHub OAuth failed: ${err.message}`, err.stack);
+      return res.redirect(
+        `${dashboardUrl}/login?error=${encodeURIComponent(err.message || 'GitHub login failed')}`,
+      );
+    }
   }
 
   @Post('logout')

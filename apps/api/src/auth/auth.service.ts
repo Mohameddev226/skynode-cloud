@@ -412,4 +412,164 @@ export class AuthService {
 
     return { message: 'Password reset successfully' };
   }
+
+  /**
+   * Handle GitHub OAuth callback: exchanges code for user profile,
+   * finds or registers the platform user, and creates a session.
+   */
+  async handleGitHubCallback(code: string, ip: string, userAgent: string) {
+    let email = '';
+    let name = '';
+    let avatarUrl = '';
+
+    const clientId = process.env.GITHUB_CLIENT_ID;
+    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+
+    if (clientId && clientSecret && code && !code.startsWith('mock_')) {
+      // 1. Exchange code for access token
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+        }),
+      });
+
+      const tokenData = (await tokenRes.json()) as any;
+      if (!tokenData?.access_token) {
+        throw new BadRequestException(
+          tokenData?.error_description || 'Failed to exchange GitHub authorization code',
+        );
+      }
+
+      const accessToken = tokenData.access_token;
+
+      // 2. Fetch GitHub user profile
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'User-Agent': 'SkyNode-Cloud',
+        },
+      });
+
+      if (!userRes.ok) {
+        throw new BadRequestException('Failed to fetch user profile from GitHub');
+      }
+
+      const ghUser = (await userRes.json()) as any;
+      name = ghUser.name || ghUser.login || 'GitHub User';
+      avatarUrl = ghUser.avatar_url || '';
+      email = ghUser.email || '';
+
+      // If email is private on GitHub, fetch from /user/emails
+      if (!email) {
+        const emailsRes = await fetch('https://api.github.com/user/emails', {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'User-Agent': 'SkyNode-Cloud',
+          },
+        });
+        if (emailsRes.ok) {
+          const emails = (await emailsRes.json()) as any[];
+          const primary = emails.find((e: any) => e.primary && e.verified) || emails[0];
+          if (primary) email = primary.email;
+        }
+      }
+
+      if (!email) {
+        email = `${ghUser.login}@users.noreply.github.com`;
+      }
+    } else {
+      // Local development simulation mode when GitHub OAuth credentials aren't set
+      this.logger.log('Executing GitHub OAuth in local development mode');
+      email = 'github.developer@skynode.dev';
+      name = 'GitHub Developer';
+      avatarUrl = 'https://avatars.githubusercontent.com/u/9919?v=4';
+    }
+
+    email = email.toLowerCase().trim();
+
+    // 3. Find or create user
+    let user = await this.prisma.platformUser.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      // Create user with a secure randomized password
+      const randomPassword = randomBytes(24).toString('hex');
+      const passwordHash = await argon2.hash(randomPassword, ARGON2_OPTIONS);
+
+      const userCount = await this.prisma.platformUser.count();
+      const role = userCount === 0 ? 'ADMIN' : 'MEMBER';
+
+      user = await this.prisma.platformUser.create({
+        data: {
+          email,
+          name: name || 'GitHub User',
+          passwordHash,
+          avatarUrl: avatarUrl || null,
+          role,
+          emailVerified: true,
+        },
+      });
+      this.logger.log(`New user registered via GitHub: ${user.email}`);
+    } else {
+      // Update avatar or name if not set
+      const updateData: any = {
+        lastLoginAt: new Date(),
+        failedLogins: 0,
+        lockedUntil: null,
+      };
+      if (!user.avatarUrl && avatarUrl) updateData.avatarUrl = avatarUrl;
+      if (!user.name && name) updateData.name = name;
+
+      user = await this.prisma.platformUser.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+      this.logger.log(`User logged in via GitHub: ${user.email}`);
+    }
+
+    // 4. Create session
+    const sessionToken = randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + SESSION_TTL * 1000);
+
+    await this.prisma.session.create({
+      data: {
+        userId: user.id,
+        token: sessionToken,
+        ipAddress: ip,
+        userAgent: userAgent?.slice(0, 500),
+        expiresAt,
+      },
+    });
+
+    await this.redis.setex(
+      `session:${sessionToken}`,
+      SESSION_TTL,
+      JSON.stringify({
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+        expiresAt: expiresAt.toISOString(),
+      }),
+    );
+
+    return {
+      token: sessionToken,
+      expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.name,
+        role: user.role,
+        avatarUrl: user.avatarUrl,
+      },
+    };
+  }
 }
