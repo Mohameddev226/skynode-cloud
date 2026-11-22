@@ -53,6 +53,7 @@ export default function ProjectSettingsPage() {
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteConfirm, setDeleteConfirm] = React.useState('');
   const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState<string | null>(null);
 
   const { register, handleSubmit, reset, formState: { errors, isDirty } } =
@@ -85,9 +86,14 @@ export default function ProjectSettingsPage() {
   async function handleDelete() {
     if (deleteConfirm !== settings?.name) return;
     setDeleting(true);
+    setDeleteError(null);
     const res = await api.delete(`/api/v1/projects/${slug}`);
-    if (res.success) router.push('/projects');
-    else setDeleting(false);
+    if (res.success) {
+      router.push('/projects');
+    } else {
+      setDeleteError(res.error?.message ?? 'Failed to delete project');
+      setDeleting(false);
+    }
   }
 
   async function copyText(text: string, label: string) {
@@ -200,7 +206,7 @@ export default function ProjectSettingsPage() {
       </Tabs>
 
       {/* Delete confirmation dialog */}
-      <Dialog open={deleteOpen} onOpenChange={(v) => { setDeleteOpen(v); setDeleteConfirm(''); }}>
+      <Dialog open={deleteOpen} onOpenChange={(v) => { setDeleteOpen(v); setDeleteConfirm(''); setDeleteError(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
@@ -212,6 +218,13 @@ export default function ProjectSettingsPage() {
               including the database, stored files, and credentials. This cannot be undone.
             </DialogDescription>
           </DialogHeader>
+
+          {deleteError && (
+            <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {deleteError}
+            </div>
+          )}
+
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
               Type <strong className="text-foreground">{settings.name}</strong> to confirm deletion:

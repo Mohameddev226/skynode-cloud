@@ -283,7 +283,11 @@ export class ProjectsService {
     });
 
     // 2. Tear down PostgreSQL database & roles
-    await this.provisioner.teardown(project.ref);
+    try {
+      await this.provisioner.teardown(project.ref);
+    } catch (tdErr: any) {
+      this.logger.warn(`Teardown notice for project ${project.ref}: ${tdErr.message}`);
+    }
 
     // 3. Mark as DELETED or delete record
     await this.prisma.project.delete({
@@ -291,16 +295,20 @@ export class ProjectsService {
     });
 
     // Audit log
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: ownerId,
-        actorType: 'PLATFORM_USER',
-        action: 'project.delete',
-        resourceType: 'project',
-        resourceId: project.id,
-        metadata: { name: project.name, ref: project.ref },
-      },
-    });
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: ownerId,
+          actorType: 'PLATFORM_USER',
+          action: 'project.delete',
+          resourceType: 'project',
+          resourceId: project.id,
+          metadata: { name: project.name, ref: project.ref },
+        },
+      });
+    } catch (auditErr: any) {
+      this.logger.warn(`Audit log notice: ${auditErr.message}`);
+    }
 
     return { message: `Project ${project.name} deleted successfully` };
   }
