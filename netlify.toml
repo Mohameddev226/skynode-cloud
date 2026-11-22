@@ -1,0 +1,17 @@
+# Netlify configuration for SkyNode Cloud Dashboard
+[build]
+  command = "npm --workspace @skynode/dashboard run build"
+  publish = "apps/dashboard/.next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_USE_NETLIFY_EDGE = "true"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Proxy API requests if backend URL is provided
+[[redirects]]
+  from = "/api/*"
+  to = ":splat"
+  status = 200
