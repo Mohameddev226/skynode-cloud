@@ -11,18 +11,30 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
       provide: REDIS_CLIENT,
       useFactory: (config: ConfigService) => {
         const logger = new Logger('RedisModule');
-        const client = new Redis({
-          host: config.get<string>('redis.host', 'localhost'),
-          port: config.get<number>('redis.port', 6379),
-          password: config.get<string>('redis.password') || undefined,
-          db: config.get<number>('redis.db', 0),
-          keyPrefix: config.get<string>('redis.keyPrefix', 'skynode:'),
-          maxRetriesPerRequest: 3,
-          retryStrategy(times: number) {
-            if (times > 10) return null;
-            return Math.min(times * 200, 5000);
-          },
-        });
+        const redisUrl = process.env.REDIS_URL;
+
+        const client = redisUrl
+          ? new Redis(redisUrl, {
+              keyPrefix: 'skynode:',
+              maxRetriesPerRequest: 3,
+              retryStrategy(times: number) {
+                if (times > 10) return null;
+                return Math.min(times * 200, 5000);
+              },
+            })
+          : new Redis({
+              host: config.get<string>('redis.host', 'localhost'),
+              port: config.get<number>('redis.port', 6379),
+              password: config.get<string>('redis.password') || undefined,
+              db: config.get<number>('redis.db', 0),
+              keyPrefix: config.get<string>('redis.keyPrefix', 'skynode:'),
+              tls: config.get('redis.tls'),
+              maxRetriesPerRequest: 3,
+              retryStrategy(times: number) {
+                if (times > 10) return null;
+                return Math.min(times * 200, 5000);
+              },
+            });
 
         client.on('connect', () => logger.log('Redis connected'));
         client.on('error', (err) => logger.error('Redis error', err.message));
