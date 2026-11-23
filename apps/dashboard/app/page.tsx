@@ -200,24 +200,27 @@ export default function LandingPage() {
             </a>
 
             {/* Auth CTA buttons */}
-            {isLoggedIn ? (
-              <Link href="/projects">
-                <Button className="bg-emerald-500 hover:bg-emerald-600 text-black font-semibold text-sm px-4 h-9 shadow-sm shadow-emerald-500/20">
-                  Dashboard
-                </Button>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/login"
+                className="text-sm font-medium text-[#a1a1a1] hover:text-white px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors"
+              >
+                Sign in
               </Link>
-            ) : (
-              <>
-                <Link href="/login" className="text-sm font-medium text-[#a1a1a1] hover:text-white px-2 py-1">
-                  Sign in
-                </Link>
-                <Link href="/login">
+              {isLoggedIn ? (
+                <Link href="/projects">
                   <Button className="bg-emerald-500 hover:bg-emerald-600 text-black font-semibold text-sm px-4 h-9 shadow-sm shadow-emerald-500/20">
                     Dashboard
                   </Button>
                 </Link>
-              </>
-            )}
+              ) : (
+                <Link href="/register">
+                  <Button className="bg-emerald-500 hover:bg-emerald-600 text-black font-semibold text-sm px-4 h-9 shadow-sm shadow-emerald-500/20">
+                    Get Started
+                  </Button>
+                </Link>
+              )}
+            </div>
           </div>
         </div>
       </header>
