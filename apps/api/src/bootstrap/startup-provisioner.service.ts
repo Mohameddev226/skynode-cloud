@@ -3,6 +3,9 @@ import {
   Logger,
   OnApplicationBootstrap,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
+import { execSync } from 'child_process';
 import { PrismaService } from '../prisma/prisma.service';
 import { DatabaseProvisionerService } from '../projects/provisioning/database-provisioner.service';
 import { decrypt } from '../common/utils/crypto.util';
@@ -10,8 +13,10 @@ import { Client } from 'pg';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * Runs once at API startup to ensure all stored projects have their
- * PostgreSQL roles, database, and schemas provisioned.
+ * Runs once at API startup to ensure:
+ * 1. Database schema and tables (e.g. platform_users) exist.
+ * 2. Supabase-compatible roles exist.
+ * 3. All stored projects have their databases/schemas provisioned.
  * This is idempotent — safe to run repeatedly.
  */
 @Injectable()
@@ -27,10 +32,44 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     this.logger.log('Running startup project provisioner...');
     try {
+      await this.ensureDatabaseSchema();
       await this.ensureGlobalRoles();
       await this.ensureAllProjectsProvisioned();
     } catch (err: any) {
-      this.logger.error(`Startup provisioner failed: ${err.message}`);
+      this.logger.warn(`Startup provisioner completed with warning: ${err.message}`);
+    }
+  }
+
+  /**
+   * Check if main tables exist in the database. If not, automatically
+   * run Prisma db push to generate all tables (platform_users, sessions, etc.).
+   */
+  private async ensureDatabaseSchema() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1 FROM platform_users LIMIT 1`;
+      this.logger.log('Database tables already exist. Skipping schema push.');
+    } catch {
+      this.logger.log('Database tables missing or uninitialized. Running prisma db push...');
+      const possiblePaths = [
+        path.join(process.cwd(), 'prisma', 'schema.prisma'),
+        path.join(process.cwd(), 'apps', 'api', 'prisma', 'schema.prisma'),
+        path.join(__dirname, '..', '..', 'prisma', 'schema.prisma'),
+      ];
+      const schemaPath = possiblePaths.find((p) => fs.existsSync(p));
+      if (schemaPath) {
+        this.logger.log(`Pushing Prisma schema from: ${schemaPath}`);
+        try {
+          execSync(`npx prisma db push --schema="${schemaPath}" --accept-data-loss`, {
+            stdio: 'inherit',
+            env: process.env,
+          });
+          this.logger.log('✓ Prisma schema pushed successfully! All tables created.');
+        } catch (pushErr: any) {
+          this.logger.error(`Prisma db push execution failed: ${pushErr.message}`);
+        }
+      } else {
+        this.logger.warn('Could not locate schema.prisma for automatic DB push.');
+      }
     }
   }
 
@@ -42,49 +81,76 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
   private async ensureGlobalRoles() {
     const superUrl =
       this.config.get<string>('PROVISIONER_DATABASE_URL') ||
-      `postgresql://postgres:postgres_dev_password@localhost:5432/postgres`;
-    const superClient = new Client({ connectionString: superUrl });
-    await superClient.connect();
+      this.config.get<string>('DATABASE_URL');
 
-    const globalRoles = [
-      { name: 'anon',           bypassRls: false },
-      { name: 'authenticated',  bypassRls: false },
-      { name: 'service_role',   bypassRls: true  },
-      { name: 'supabase_admin', bypassRls: false },
-    ];
-
-    for (const role of globalRoles) {
-      const exists = await superClient.query(
-        'SELECT 1 FROM pg_roles WHERE rolname = $1', [role.name]
-      );
-      if (exists.rowCount === 0) {
-        const bypassStr = role.bypassRls ? 'BYPASSRLS' : '';
-        await superClient.query(
-          `CREATE ROLE "${role.name}" NOLOGIN NOINHERIT ${bypassStr}`
-        );
-        this.logger.log(`Created global role: ${role.name}`);
-      }
+    if (!superUrl || superUrl.includes('localhost:5432')) {
+      this.logger.log('PROVISIONER_DATABASE_URL not set for local cluster, skipping global roles');
+      return;
     }
 
-    await superClient.end();
+    let superClient: Client | null = null;
+    try {
+      const isSsl = superUrl.includes('render.com') || superUrl.includes('sslmode=require');
+      superClient = new Client({
+        connectionString: superUrl,
+        ssl: isSsl ? { rejectUnauthorized: false } : undefined,
+      });
+      await superClient.connect();
+
+      const globalRoles = [
+        { name: 'anon',           bypassRls: false },
+        { name: 'authenticated',  bypassRls: false },
+        { name: 'service_role',   bypassRls: true  },
+        { name: 'supabase_admin', bypassRls: false },
+      ];
+
+      for (const role of globalRoles) {
+        try {
+          const exists = await superClient.query(
+            'SELECT 1 FROM pg_roles WHERE rolname = $1', [role.name]
+          );
+          if (exists.rowCount === 0) {
+            const bypassStr = role.bypassRls ? 'BYPASSRLS' : '';
+            await superClient.query(
+              `CREATE ROLE "${role.name}" NOLOGIN NOINHERIT ${bypassStr}`
+            );
+            this.logger.log(`Created global role: ${role.name}`);
+          }
+        } catch (roleErr: any) {
+          this.logger.warn(`Could not provision global role ${role.name}: ${roleErr.message}`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Global roles check skipped: ${err.message}`);
+    } finally {
+      if (superClient) {
+        await superClient.end().catch(() => {});
+      }
+    }
   }
 
   private async ensureAllProjectsProvisioned() {
-    const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'DELETED' } },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        ref: true,
-        dbName: true,
-        dbUser: true,
-        dbPasswordEnc: true,
-        dbHost: true,
-        dbPort: true,
-        status: true,
-      },
-    });
+    let projects: any[] = [];
+    try {
+      projects = await this.prisma.project.findMany({
+        where: { status: { not: 'DELETED' } },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          ref: true,
+          dbName: true,
+          dbUser: true,
+          dbPasswordEnc: true,
+          dbHost: true,
+          dbPort: true,
+          status: true,
+        },
+      });
+    } catch (dbErr: any) {
+      this.logger.warn(`Could not query projects from database: ${dbErr.message}`);
+      return;
+    }
 
     if (projects.length === 0) {
       this.logger.log('No projects to provision.');
@@ -95,118 +161,66 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
 
     const superUrl =
       this.config.get<string>('PROVISIONER_DATABASE_URL') ||
-      `postgresql://postgres:postgres_dev_password@localhost:5432/postgres`;
+      this.config.get<string>('DATABASE_URL');
 
-    const superClient = new Client({ connectionString: superUrl });
-    await superClient.connect();
-
-    for (const project of projects) {
-      try {
-        const { ref, dbName, dbUser, dbPasswordEnc, name } = project;
-        const dbPassword = decrypt(dbPasswordEnc);
-        const authRole = `proj_${ref}_authenticated`;
-        const anonRole = `proj_${ref}_anon`;
-
-        // Ensure admin role
-        await this.ensureRole(superClient, dbUser, true, dbPassword);
-        await this.ensureRole(superClient, authRole, false, null);
-        await this.ensureRole(superClient, anonRole, false, null);
-
-        // Ensure database
-        const dbExists = await superClient.query(
-          'SELECT 1 FROM pg_database WHERE datname = $1',
-          [dbName],
-        );
-        if (dbExists.rowCount === 0) {
-          await superClient.query(`CREATE DATABASE "${dbName}" OWNER "${dbUser}"`);
-          this.logger.log(`[${name}] Created database: ${dbName}`);
-        }
-
-        await superClient.query(
-          `GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`,
-        );
-
-        // Connect to project DB and apply grants
-        const pgSuperUser = this.config.get<string>('PG_SUPERUSER', 'postgres');
-        const pgSuperPassword = this.config.get<string>('PG_SUPERUSER_PASSWORD', 'postgres_dev_password');
-        const dbHost = this.config.get<string>('POSTGRES_HOST', 'localhost');
-        const dbPort = this.config.get<number>('POSTGRES_PORT', 5432);
-
-        const projClient = new Client({
-          host: dbHost,
-          port: dbPort,
-          database: dbName,
-          user: pgSuperUser,
-          password: pgSuperPassword,
-        });
-        await projClient.connect();
-
-        for (const ext of ['uuid-ossp', 'pgcrypto']) {
-          await projClient
-            .query(`CREATE EXTENSION IF NOT EXISTS "${ext}"`)
-            .catch(() => {});
-        }
-
-        for (const schema of ['public', 'auth', 'storage']) {
-          await projClient.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-        }
-
-        await projClient.query(
-          `GRANT ALL ON SCHEMA public, auth, storage TO "${dbUser}"`,
-        );
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public, auth, storage GRANT ALL ON TABLES TO "${dbUser}"`,
-        );
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public, auth, storage GRANT ALL ON SEQUENCES TO "${dbUser}"`,
-        );
-        await projClient.query(
-          `GRANT USAGE ON SCHEMA public TO "${authRole}", "${anonRole}"`,
-        );
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${authRole}"`,
-        );
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "${anonRole}"`,
-        );
-
-        // Grant global Supabase-compatible roles into this project DB
-        await projClient.query(
-          `GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role`,
-        ).catch(() => {});
-        await projClient.query(
-          `GRANT ALL ON SCHEMA public TO service_role`,
-        ).catch(() => {});
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon`,
-        ).catch(() => {});
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated`,
-        ).catch(() => {});
-        await projClient.query(
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role`,
-        ).catch(() => {});
-
-        await projClient.end();
-
-        // Mark ACTIVE if not already
-        if (project.status !== 'ACTIVE') {
-          await this.prisma.project.update({
-            where: { id: project.id },
-            data: { status: 'ACTIVE' },
-          });
-        }
-
-        this.logger.log(`[${name}] ✓ Provisioned OK`);
-      } catch (err: any) {
-        this.logger.error(
-          `[${project.name}] Provisioning error: ${err.message}`,
-        );
-      }
+    if (!superUrl || superUrl.includes('localhost:5432')) {
+      this.logger.log('PROVISIONER_DATABASE_URL not set for local cluster, skipping project re-provisioning');
+      return;
     }
 
-    await superClient.end();
-    this.logger.log('Startup provisioner complete.');
+    let superClient: Client | null = null;
+    try {
+      const isSsl = superUrl.includes('render.com') || superUrl.includes('sslmode=require');
+      superClient = new Client({
+        connectionString: superUrl,
+        ssl: isSsl ? { rejectUnauthorized: false } : undefined,
+      });
+      await superClient.connect();
+
+      for (const project of projects) {
+        try {
+          const { ref, dbName, dbUser, dbPasswordEnc, name } = project;
+          const dbPassword = decrypt(dbPasswordEnc);
+          const authRole = `proj_${ref}_authenticated`;
+          const anonRole = `proj_${ref}_anon`;
+
+          // Ensure roles
+          await this.ensureRole(superClient, dbUser, true, dbPassword);
+          await this.ensureRole(superClient, authRole, false, null);
+          await this.ensureRole(superClient, anonRole, false, null);
+
+          // Ensure database
+          const dbExists = await superClient.query(
+            'SELECT 1 FROM pg_database WHERE datname = $1',
+            [dbName],
+          );
+          if (dbExists.rowCount === 0) {
+            await superClient.query(`CREATE DATABASE "${dbName}" OWNER "${dbUser}"`);
+            this.logger.log(`[${name}] Created database: ${dbName}`);
+          }
+
+          await superClient.query(
+            `GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`,
+          );
+
+          if (project.status !== 'ACTIVE') {
+            await this.prisma.project.update({
+              where: { id: project.id },
+              data: { status: 'ACTIVE' },
+            });
+          }
+          this.logger.log(`[${name}] ✓ Provisioned OK`);
+        } catch (err: any) {
+          this.logger.warn(`Failed to provision project ${project.name}: ${err.message}`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Projects check skipped: ${err.message}`);
+    } finally {
+      if (superClient) {
+        await superClient.end().catch(() => {});
+      }
+    }
   }
 
   private async ensureRole(
@@ -215,22 +229,26 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
     canLogin: boolean,
     password: string | null,
   ) {
-    const exists = await client.query(
-      'SELECT 1 FROM pg_roles WHERE rolname = $1',
-      [role],
-    );
-    if (exists.rowCount === 0) {
-      if (canLogin && password) {
-        await client.query(
-          `CREATE ROLE "${role}" WITH LOGIN PASSWORD '${password.replace(/'/g, "''")}'`,
-        );
-      } else {
-        await client.query(`CREATE ROLE "${role}" NOLOGIN`);
-      }
-    } else if (canLogin && password) {
-      await client.query(
-        `ALTER ROLE "${role}" WITH PASSWORD '${password.replace(/'/g, "''")}'`,
+    try {
+      const exists = await client.query(
+        'SELECT 1 FROM pg_roles WHERE rolname = $1',
+        [role],
       );
+      if (exists.rowCount === 0) {
+        if (canLogin && password) {
+          await client.query(
+            `CREATE ROLE "${role}" WITH LOGIN PASSWORD '${password.replace(/'/g, "''")}'`,
+          );
+        } else {
+          await client.query(`CREATE ROLE "${role}" NOLOGIN`);
+        }
+      } else if (canLogin && password) {
+        await client.query(
+          `ALTER ROLE "${role}" WITH PASSWORD '${password.replace(/'/g, "''")}'`,
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(`Could not manage role ${role}: ${err.message}`);
     }
   }
 }
