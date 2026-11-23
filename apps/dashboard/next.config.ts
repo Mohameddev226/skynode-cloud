@@ -22,6 +22,11 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+    // On Netlify, the netlify.toml [[redirects]] handles API proxying,
+    // so Next.js rewrites are only used in local dev / standalone mode.
+    if (process.env.NETLIFY) {
+      return [];
+    }
     return [
       {
         source: '/api/:path*',

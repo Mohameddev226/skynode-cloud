@@ -10,8 +10,9 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Proxy API requests if backend URL is provided
+# Proxy API requests to the Render backend
 [[redirects]]
   from = "/api/*"
-  to = ":splat"
+  to = "https://skynode-cloud.onrender.com/api/:splat"
   status = 200
+  force = true
