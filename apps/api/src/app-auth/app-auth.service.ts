@@ -112,6 +112,8 @@ export class AppAuthService {
   }
 
   private async ensureSchema(client: PoolClient): Promise<void> {
+    await client.query(`CREATE SCHEMA IF NOT EXISTS auth;`).catch(() => {});
+    await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`).catch(() => {});
     // Ensure auth.users and auth.sessions tables exist in provisioned DB
     await client.query(`
       CREATE TABLE IF NOT EXISTS auth.users (

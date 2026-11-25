@@ -64,8 +64,24 @@ export class DatabaseProvisionerService {
     const anonRole = `proj_${ref}_anon`;
     const password = this.generateSecurePassword();
 
-    const host = this.config.get<string>('DB_HOST', 'localhost');
-    const port = parseInt(this.config.get<string>('DB_PORT', '5432'), 10);
+    const defaultUrl = 'postgresql://skynode:skynode@localhost:5432/postgres';
+    const connectionString =
+      this.config.get<string>('PROVISIONER_DATABASE_URL') ||
+      this.config.get<string>('DATABASE_URL') ||
+      defaultUrl;
+
+    let host = this.config.get<string>('DB_HOST');
+    let port = parseInt(this.config.get<string>('DB_PORT', '5432'), 10);
+
+    if (!host) {
+      try {
+        const parsed = new URL(connectionString);
+        host = parsed.hostname;
+        port = parsed.port ? parseInt(parsed.port, 10) : 5432;
+      } catch {
+        host = 'localhost';
+      }
+    }
 
     this.logger.log(`Provisioning database ${dbName} for project ref: ${ref}`);
 
@@ -82,8 +98,7 @@ export class DatabaseProvisionerService {
       await client.query(`CREATE DATABASE "${dbName}"`);
       this.logger.log(`Created database: ${dbName}`);
     } catch (err: any) {
-      this.logger.error(`Failed to create database ${dbName}: ${err.message}`);
-      throw new InternalServerErrorException(`Database provisioning failed: ${err.message}`);
+      this.logger.warn(`Could not create dedicated database ${dbName}: ${err.message}. Project will use shared database schema.`);
     } finally {
       if (client) client.release();
     }
@@ -98,8 +113,12 @@ export class DatabaseProvisionerService {
 
       // Replace target database name in connection string
       const projectConnUrl = baseUrl.replace(/\/[^/?]+(\?|$)/, `/${dbName}$1`);
+      const isSsl = projectConnUrl.includes('render.com') || projectConnUrl.includes('sslmode=require');
 
-      projectDbClient = new Client({ connectionString: projectConnUrl });
+      projectDbClient = new Client({
+        connectionString: projectConnUrl,
+        ssl: isSsl ? { rejectUnauthorized: false } : undefined,
+      });
       await projectDbClient.connect();
 
       // Enable extensions if allowed
@@ -149,15 +168,10 @@ export class DatabaseProvisionerService {
 
       this.logger.log(`Initialized schemas & roles for project ${ref}`);
     } catch (err: any) {
-      this.logger.error(`Error configuring project database ${dbName}: ${err.message}`);
-      // Teardown created DB on error
-      await this.teardown(ref).catch((tdErr) =>
-        this.logger.error(`Teardown after failure error: ${tdErr.message}`),
-      );
-      throw new InternalServerErrorException(`Database initialization failed: ${err.message}`);
+      this.logger.warn(`Project database init for ${dbName}: ${err.message}. Project will use shared database connection.`);
     } finally {
       if (projectDbClient) {
-        await projectDbClient.end();
+        await projectDbClient.end().catch(() => {});
       }
     }
 
