@@ -13,21 +13,23 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
         const logger = new Logger('RedisModule');
         const redisUrl = process.env.REDIS_URL;
 
+        const backoffStrategy = (times: number) => Math.min(times * 500, 10000);
+
         let client: Redis;
         if (redisUrl) {
           const isUpstash = redisUrl.includes('upstash.io');
-          const finalUrl = isUpstash && redisUrl.startsWith('redis://')
-            ? redisUrl.replace('redis://', 'rediss://')
-            : redisUrl;
+          const finalUrl =
+            isUpstash && redisUrl.startsWith('redis://')
+              ? redisUrl.replace('redis://', 'rediss://')
+              : redisUrl;
 
           client = new Redis(finalUrl, {
             keyPrefix: 'skynode:',
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: 1,
+            enableOfflineQueue: false,
+            connectTimeout: 5000,
             tls: finalUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
-            retryStrategy(times: number) {
-              if (times > 10) return null;
-              return Math.min(times * 200, 5000);
-            },
+            retryStrategy: backoffStrategy,
           });
         } else {
           client = new Redis({
@@ -37,16 +39,22 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
             db: config.get<number>('redis.db', 0),
             keyPrefix: config.get<string>('redis.keyPrefix', 'skynode:'),
             tls: config.get('redis.tls'),
-            maxRetriesPerRequest: 3,
-            retryStrategy(times: number) {
-              if (times > 10) return null;
-              return Math.min(times * 200, 5000);
-            },
+            maxRetriesPerRequest: 1,
+            enableOfflineQueue: false,
+            connectTimeout: 5000,
+            retryStrategy: backoffStrategy,
           });
         }
 
+        let lastErrLog = 0;
         client.on('connect', () => logger.log('Redis connected'));
-        client.on('error', (err) => logger.error('Redis error', err.message));
+        client.on('error', (err) => {
+          const now = Date.now();
+          if (now - lastErrLog > 30000) {
+            logger.warn(`Redis connection notice (${err.message}); DB session fallback active.`);
+            lastErrLog = now;
+          }
+        });
 
         return client;
       },

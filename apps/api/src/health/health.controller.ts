@@ -1,6 +1,8 @@
-import { Controller, Get, Logger } from '@nestjs/common';
+import { Controller, Get, Logger, Inject, Optional } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import type Redis from 'ioredis';
+import { REDIS_CLIENT } from '../redis/redis.module';
 
 interface ServiceStatus {
   status: 'up' | 'down';
@@ -26,7 +28,10 @@ export class HealthController {
   private readonly logger = new Logger(HealthController.name);
   private readonly startTime = Date.now();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() @Inject(REDIS_CLIENT) private readonly redisClient?: Redis,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'System health check' })
@@ -58,44 +63,92 @@ export class HealthController {
   // ── Service probes ──────────────────────────────────────────
 
   private async checkDatabase(): Promise<ServiceStatus> {
+    let client: any = null;
     try {
       const { Client } = await import('pg');
-      const client = new Client({
-        connectionString: this.config.get<string>('DATABASE_URL'),
+      const dbUrl = this.config.get<string>('DATABASE_URL') ?? '';
+      const isSsl = dbUrl.includes('render.com') || dbUrl.includes('sslmode=require');
+      client = new Client({
+        connectionString: dbUrl,
+        ssl: isSsl ? { rejectUnauthorized: false } : undefined,
         connectionTimeoutMillis: 3000,
       });
       const start = Date.now();
       await client.connect();
       await client.query('SELECT 1');
       const latencyMs = Date.now() - start;
-      await client.end();
       return { status: 'up', latencyMs };
     } catch (error: any) {
       this.logger.warn(`Database health check failed: ${error.message}`);
       return { status: 'down', error: error.message };
+    } finally {
+      if (client) {
+        await client.end().catch(() => {});
+      }
     }
   }
 
   private async checkRedis(): Promise<ServiceStatus> {
+    if (this.redisClient) {
+      try {
+        const start = Date.now();
+        await Promise.race([
+          this.redisClient.ping(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Redis ping timed out')), 2500),
+          ),
+        ]);
+        return { status: 'up', latencyMs: Date.now() - start };
+      } catch (error: any) {
+        this.logger.warn(`Redis health check failed: ${error.message}`);
+        return { status: 'down', error: error.message };
+      }
+    }
+
+    let tempRedis: Redis | null = null;
     try {
-      const Redis = (await import('ioredis')).default;
-      const redis = new Redis({
-        host: this.config.get<string>('REDIS_HOST', 'localhost'),
-        port: this.config.get<number>('REDIS_PORT', 6379),
-        password: this.config.get<string>('REDIS_PASSWORD') || undefined,
-        connectTimeout: 3000,
-        maxRetriesPerRequest: 1,
-        lazyConnect: true,
-      });
+      const RedisCtor = (await import('ioredis')).default;
+      const redisUrl = process.env.REDIS_URL;
+      const isUpstash = Boolean(redisUrl?.includes('upstash.io'));
+      const finalUrl =
+        redisUrl && isUpstash && redisUrl.startsWith('redis://')
+          ? redisUrl.replace('redis://', 'rediss://')
+          : redisUrl;
+
+      tempRedis = finalUrl
+        ? new RedisCtor(finalUrl, {
+            connectTimeout: 2500,
+            maxRetriesPerRequest: 0,
+            enableOfflineQueue: false,
+            lazyConnect: true,
+            retryStrategy: () => null,
+            tls: finalUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+          })
+        : new RedisCtor({
+            host: this.config.get<string>('REDIS_HOST', 'localhost'),
+            port: this.config.get<number>('REDIS_PORT', 6379),
+            password: this.config.get<string>('REDIS_PASSWORD') || undefined,
+            connectTimeout: 2500,
+            maxRetriesPerRequest: 0,
+            enableOfflineQueue: false,
+            lazyConnect: true,
+            retryStrategy: () => null,
+          });
+
+      // Prevent unhandled error event spam in Node/Render logs
+      tempRedis.on('error', () => {});
+
       const start = Date.now();
-      await redis.connect();
-      await redis.ping();
-      const latencyMs = Date.now() - start;
-      await redis.quit();
-      return { status: 'up', latencyMs };
+      await tempRedis.connect();
+      await tempRedis.ping();
+      return { status: 'up', latencyMs: Date.now() - start };
     } catch (error: any) {
       this.logger.warn(`Redis health check failed: ${error.message}`);
       return { status: 'down', error: error.message };
+    } finally {
+      if (tempRedis) {
+        tempRedis.disconnect();
+      }
     }
   }
 

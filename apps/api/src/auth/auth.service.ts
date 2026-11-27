@@ -43,6 +43,37 @@ export class AuthService {
     @Optional() private readonly mailService?: MailService,
   ) {}
 
+  private async safeRedisGet(key: string): Promise<string | null> {
+    try {
+      const status = (this.redis as unknown as { status?: string }).status;
+      if (status && status !== 'ready') return null;
+      return await this.redis.get(key);
+    } catch (err: any) {
+      this.logger.debug(`Redis get skipped (${err?.message}); using DB`);
+      return null;
+    }
+  }
+
+  private async safeRedisSetex(key: string, ttl: number, value: string): Promise<void> {
+    try {
+      const status = (this.redis as unknown as { status?: string }).status;
+      if (status && status !== 'ready') return;
+      await this.redis.setex(key, ttl, value);
+    } catch (err: any) {
+      this.logger.debug(`Redis setex skipped (${err?.message})`);
+    }
+  }
+
+  private async safeRedisDel(key: string): Promise<void> {
+    try {
+      const status = (this.redis as unknown as { status?: string }).status;
+      if (status && status !== 'ready') return;
+      await this.redis.del(key);
+    } catch (err: any) {
+      this.logger.debug(`Redis del skipped (${err?.message})`);
+    }
+  }
+
   /**
    * Register a new platform user.
    */
@@ -68,7 +99,7 @@ export class AuthService {
 
     if (this.mailService) {
       const verifyToken = randomBytes(32).toString('hex');
-      await this.redis.setex(`email_verify:${verifyToken}`, 86400, user.id);
+      await this.safeRedisSetex(`email_verify:${verifyToken}`, 86400, user.id);
       this.mailService.sendVerificationEmail(user.email, verifyToken).catch((err) => {
         this.logger.warn(`Failed to send verification email: ${err.message}`);
       });
@@ -147,8 +178,8 @@ export class AuthService {
       },
     });
 
-    // Cache session in Redis for fast lookups
-    await this.redis.setex(
+    // Cache session in Redis for fast lookups (non-fatal if Redis is unavailable)
+    await this.safeRedisSetex(
       `session:${sessionToken}`,
       SESSION_TTL,
       JSON.stringify({
@@ -180,7 +211,7 @@ export class AuthService {
   async logout(sessionToken: string) {
     if (!sessionToken) return;
 
-    await this.redis.del(`session:${sessionToken}`);
+    await this.safeRedisDel(`session:${sessionToken}`);
 
     await this.prisma.session.deleteMany({
       where: { token: sessionToken },
@@ -192,17 +223,22 @@ export class AuthService {
   /**
    * Validate a session token — called by AuthGuard.
    * Returns user data if valid, null otherwise.
+   * Automatically falls back to PostgreSQL if Redis is unreachable.
    */
   async validateSession(token: string) {
-    // Check Redis cache first
-    const cached = await this.redis.get(`session:${token}`);
+    // Check Redis cache first (falls back cleanly on Redis outage)
+    const cached = await this.safeRedisGet(`session:${token}`);
     if (cached) {
-      const data = JSON.parse(cached);
-      if (new Date(data.expiresAt) > new Date()) {
-        return data;
+      try {
+        const data = JSON.parse(cached);
+        if (new Date(data.expiresAt) > new Date()) {
+          return data;
+        }
+        // Expired — clean up
+        await this.safeRedisDel(`session:${token}`);
+      } catch {
+        // Ignore corrupt cached JSON and re-validate from DB
       }
-      // Expired — clean up
-      await this.redis.del(`session:${token}`);
     }
 
     // Fallback to DB
@@ -217,7 +253,7 @@ export class AuthService {
 
     if (!session || session.expiresAt < new Date()) {
       if (session) {
-        await this.prisma.session.delete({ where: { id: session.id } });
+        await this.prisma.session.delete({ where: { id: session.id } }).catch(() => {});
       }
       return null;
     }
@@ -231,7 +267,7 @@ export class AuthService {
     };
     const ttl = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
     if (ttl > 0) {
-      await this.redis.setex(`session:${token}`, ttl, JSON.stringify(sessionData));
+      await this.safeRedisSetex(`session:${token}`, ttl, JSON.stringify(sessionData));
     }
 
     return sessionData;
@@ -356,7 +392,7 @@ export class AuthService {
 
     if (!session) throw new NotFoundException('Session not found');
 
-    await this.redis.del(`session:${session.token}`);
+    await this.safeRedisDel(`session:${session.token}`);
     await this.prisma.session.delete({ where: { id: sessionId } });
 
     return { message: 'Session revoked' };
@@ -549,7 +585,7 @@ export class AuthService {
       },
     });
 
-    await this.redis.setex(
+    await this.safeRedisSetex(
       `session:${sessionToken}`,
       SESSION_TTL,
       JSON.stringify({

@@ -159,6 +159,23 @@ describe('AuthService', () => {
       });
       expect(mockPrisma.session.findUnique).not.toHaveBeenCalled();
     });
+
+    it('should fall back gracefully to PostgreSQL session when Redis throws ECONNREFUSED', async () => {
+      mockRedis.get.mockRejectedValueOnce(new Error('Connection is closed.'));
+      mockRedis.setex.mockRejectedValueOnce(new Error('Connection is closed.'));
+      mockPrisma.session.findUnique.mockResolvedValue({
+        id: 'sess-db',
+        token: 'tok-fallback',
+        expiresAt: new Date(Date.now() + 3600 * 1000),
+        user: { id: 'u1', email: 'test@skynode.cloud', role: 'OWNER', name: 'Test', avatarUrl: null },
+      });
+
+      const session = await service.validateSession('tok-fallback');
+      expect(session?.userId).toBe('u1');
+      expect(mockPrisma.session.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { token: 'tok-fallback' } }),
+      );
+    });
   });
 
   describe('forgotPassword', () => {
