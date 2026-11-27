@@ -10,6 +10,6 @@ import { PrismaModule } from '../prisma/prisma.module';
   imports: [DatabaseStudioModule, AuthModule, PrismaModule],
   controllers: [AppAuthController],
   providers: [AppAuthService, ProjectAppAuthGuard],
-  exports: [AppAuthService],
+  exports: [AppAuthService, ProjectAppAuthGuard],
 })
 export class AppAuthModule {}

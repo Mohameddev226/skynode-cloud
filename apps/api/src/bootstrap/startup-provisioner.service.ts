@@ -8,6 +8,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { PrismaService } from '../prisma/prisma.service';
 import { DatabaseProvisionerService } from '../projects/provisioning/database-provisioner.service';
+import { ensureProjectDataPlaneSchema } from '../projects/provisioning/project-schema.initializer';
 import { decrypt } from '../common/utils/crypto.util';
 import { Client } from 'pg';
 import { ConfigService } from '@nestjs/config';
@@ -202,6 +203,28 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
           await superClient.query(
             `GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`,
           );
+
+          // Upgrade/ensure multi-tenant schema & RLS helper functions inside the project DB
+          let projClient: Client | null = null;
+          try {
+            const projConnUrl = superUrl.replace(/\/[^/?]+(\?|$)/, `/${dbName}$1`);
+            projClient = new Client({
+              connectionString: projConnUrl,
+              ssl: isSsl ? { rejectUnauthorized: false } : undefined,
+            });
+            await projClient.connect();
+            await ensureProjectDataPlaneSchema(projClient, {
+              ref,
+              adminRole: dbUser,
+              authRole,
+              anonRole,
+              logger: this.logger,
+            });
+          } catch (schemaErr: any) {
+            this.logger.warn(`[${name}] Data plane schema upgrade notice: ${schemaErr.message}`);
+          } finally {
+            if (projClient) await projClient.end().catch(() => {});
+          }
 
           if (project.status !== 'ACTIVE') {
             await this.prisma.project.update({

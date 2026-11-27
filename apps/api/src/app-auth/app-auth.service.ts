@@ -5,15 +5,19 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PoolClient } from 'pg';
 import * as argon2 from 'argon2';
 import * as jwt from 'jsonwebtoken';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { ProjectConnectionManager, ProjectDbCredentials } from '../database-studio/project-connection.manager';
 import { PrismaService } from '../prisma/prisma.service';
 import { decrypt } from '../common/utils/crypto.util';
+import { ensureProjectDataPlaneSchema } from '../projects/provisioning/project-schema.initializer';
+import { MailService } from '../mail/mail.service';
 
 export interface AppUser {
   id: string;
@@ -26,12 +30,26 @@ export interface AppUser {
   is_banned: boolean;
 }
 
+export interface TenantMembershipSummary {
+  tenant_id: string;
+  tenant_slug: string;
+  tenant_name: string;
+  tenant_status: string;
+  role_id: string;
+  role_name: string;
+  membership_status: string;
+  custom_attributes: Record<string, unknown>;
+  permissions: string[];
+}
+
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
   token_type: 'bearer';
   expires_in: number;
   user: Omit<AppUser, 'is_banned'>;
+  active_tenant: TenantMembershipSummary | null;
+  tenants: TenantMembershipSummary[];
 }
 
 @Injectable()
@@ -44,6 +62,7 @@ export class AppAuthService {
     private readonly config: ConfigService,
     private readonly connManager: ProjectConnectionManager,
     private readonly prisma: PrismaService,
+    @Optional() private readonly mailService?: MailService,
   ) {}
 
   private getJwtSecret(projectRef: string): string {
@@ -51,13 +70,19 @@ export class AppAuthService {
     return `${base}:${projectRef}`;
   }
 
-  private async getCredentials(projectRef: string): Promise<ProjectDbCredentials> {
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectRef);
+  private hashToken(raw: string): string {
+    return createHash('sha256').update(raw).digest('hex');
+  }
+
+  async resolveProject(
+    identifier: string,
+  ): Promise<{ id: string; ref: string; slug: string; creds: ProjectDbCredentials }> {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
     const or: Array<{ id?: string; slug?: string; ref?: string }> = [
-      { ref: projectRef },
-      { slug: projectRef },
+      { ref: identifier },
+      { slug: identifier },
     ];
-    if (isUuid) or.push({ id: projectRef });
+    if (isUuid) or.push({ id: identifier });
 
     const project = await this.prisma.project.findFirst({
       where: {
@@ -65,22 +90,28 @@ export class AppAuthService {
         OR: or,
       },
     });
-    if (!project) throw new NotFoundException(`Project ${projectRef} not found`);
+    if (!project) throw new NotFoundException(`Project ${identifier} not found`);
+
     return {
-      host: project.dbHost,
-      port: project.dbPort,
-      database: project.dbName,
-      user: project.dbUser,
-      password: decrypt(project.dbPasswordEnc),
+      id: project.id,
+      ref: project.ref,
+      slug: project.slug,
+      creds: {
+        host: project.dbHost,
+        port: project.dbPort,
+        database: project.dbName,
+        user: project.dbUser,
+        password: decrypt(project.dbPasswordEnc),
+      },
     };
   }
 
   private async withProjectClient<T>(
-    projectRef: string,
-    fn: (client: PoolClient) => Promise<T>,
+    projectIdentifier: string,
+    fn: (client: PoolClient, resolvedRef: string) => Promise<T>,
   ): Promise<T> {
-    const creds = await this.getCredentials(projectRef);
-    return this.connManager.withClient(creds, fn);
+    const resolved = await this.resolveProject(projectIdentifier);
+    return this.connManager.withClient(resolved.creds, (client) => fn(client, resolved.ref));
   }
 
   private signAccessToken(payload: Record<string, unknown>, projectRef: string): string {
@@ -111,56 +142,100 @@ export class AppAuthService {
     }
   }
 
-  private async ensureSchema(client: PoolClient): Promise<void> {
-    await client.query(`CREATE SCHEMA IF NOT EXISTS auth;`).catch(() => {});
-    await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`).catch(() => {});
-    // Ensure auth.users and auth.sessions tables exist in provisioned DB
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS auth.users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        email TEXT UNIQUE NOT NULL,
-        email_confirmed_at TIMESTAMPTZ,
-        encrypted_password TEXT NOT NULL,
-        full_name TEXT,
-        avatar_url TEXT,
-        is_banned BOOLEAN NOT NULL DEFAULT FALSE,
-        banned_until TIMESTAMPTZ,
-        last_sign_in_at TIMESTAMPTZ,
-        reset_password_token TEXT,
-        reset_password_sent_at TIMESTAMPTZ,
-        confirmation_token TEXT,
-        confirmation_sent_at TIMESTAMPTZ,
-        raw_user_meta_data JSONB DEFAULT '{}',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS auth.sessions (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-        refresh_token TEXT UNIQUE NOT NULL,
-        refresh_token_expires_at TIMESTAMPTZ NOT NULL,
-        user_agent TEXT,
-        ip TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON auth.sessions(user_id);
-      CREATE INDEX IF NOT EXISTS idx_sessions_refresh_token ON auth.sessions(refresh_token);
-      CREATE INDEX IF NOT EXISTS idx_users_email ON auth.users(email);
-    `);
+  async resolveAndVerifyToken(
+    token: string,
+    projectIdentifier: string,
+  ): Promise<{ payload: jwt.JwtPayload; projectRef: string }> {
+    const resolved = await this.resolveProject(projectIdentifier);
+    const payload = this.verifyToken(token, resolved.ref);
+    return { payload, projectRef: resolved.ref };
   }
 
-  private buildTokenPair(user: AppUser, sessionId: string, projectRef: string): TokenPair {
+  private async ensureSchema(client: PoolClient, projectRef?: string): Promise<void> {
+    await ensureProjectDataPlaneSchema(client, {
+      ref: projectRef,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Loads active tenant memberships and effective permissions for a user.
+   */
+  async fetchUserMemberships(
+    client: PoolClient,
+    userId: string,
+  ): Promise<TenantMembershipSummary[]> {
+    const res = await client.query<{
+      tenant_id: string;
+      tenant_slug: string;
+      tenant_name: string;
+      tenant_status: string;
+      role_id: string;
+      role_name: string;
+      membership_status: string;
+      custom_attributes: Record<string, unknown> | null;
+      permissions: string[] | null;
+    }>(
+      `
+      SELECT
+        t.id AS tenant_id,
+        t.slug AS tenant_slug,
+        t.name AS tenant_name,
+        t.status AS tenant_status,
+        tr.id AS role_id,
+        tr.name AS role_name,
+        tu.status AS membership_status,
+        tu.custom_attributes,
+        COALESCE(
+          (
+            SELECT array_agg(tp.resource || ':' || tp.action)
+            FROM auth.tenant_permissions tp
+            WHERE tp.role_id = tr.id
+          ),
+          ARRAY[]::TEXT[]
+        ) AS permissions
+      FROM auth.tenant_users tu
+      JOIN auth.tenants t ON t.id = tu.tenant_id
+      JOIN auth.tenant_roles tr ON tr.id = tu.role_id
+      WHERE tu.user_id = $1
+        AND tu.status = 'ACTIVE'
+        AND t.status = 'ACTIVE'
+      ORDER BY tu.created_at ASC
+      `,
+      [userId],
+    ).catch(() => ({ rows: [] as any[] }));
+
+    return res.rows.map((r) => ({
+      tenant_id: r.tenant_id,
+      tenant_slug: r.tenant_slug,
+      tenant_name: r.tenant_name,
+      tenant_status: r.tenant_status,
+      role_id: r.role_id,
+      role_name: r.role_name,
+      membership_status: r.membership_status,
+      custom_attributes: r.custom_attributes ?? {},
+      permissions: Array.isArray(r.permissions) ? r.permissions : [],
+    }));
+  }
+
+  private buildTokenPair(
+    user: AppUser,
+    sessionId: string,
+    projectRef: string,
+    memberships: TenantMembershipSummary[] = [],
+    activeTenant: TenantMembershipSummary | null = null,
+  ): TokenPair {
     const payload = {
       sub: user.id,
       email: user.email,
       full_name: user.full_name,
       role: 'authenticated',
+      api_role: 'authenticated',
       sid: sessionId,
+      tenant_id: activeTenant?.tenant_id ?? null,
+      tenant_slug: activeTenant?.tenant_slug ?? null,
+      tenant_role: activeTenant?.role_name ?? null,
+      permissions: activeTenant?.permissions ?? [],
     };
 
     return {
@@ -177,20 +252,24 @@ export class AppAuthService {
         updated_at: user.updated_at,
         last_sign_in_at: user.last_sign_in_at,
       },
+      active_tenant: activeTenant,
+      tenants: memberships,
     };
   }
 
   async register(
-    projectRef: string,
+    projectIdentifier: string,
     email: string,
     password: string,
     fullName?: string,
   ): Promise<TokenPair> {
-    return this.withProjectClient(projectRef, async (client) => {
-      await this.ensureSchema(client);
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
 
-      // Check existing user
-      const existing = await client.query('SELECT id FROM auth.users WHERE email = $1', [email]);
+      const normalizedEmail = email.trim().toLowerCase();
+      const existing = await client.query('SELECT id FROM auth.users WHERE LOWER(email) = $1', [
+        normalizedEmail,
+      ]);
       if (existing.rowCount && existing.rowCount > 0) {
         throw new ConflictException('Email already registered');
       }
@@ -202,11 +281,17 @@ export class AppAuthService {
         parallelism: 1,
       });
 
+      const confirmRaw = randomBytes(32).toString('base64url');
+      const confirmHash = this.hashToken(confirmRaw);
+
       const result = await client.query<AppUser>(
-        `INSERT INTO auth.users (email, encrypted_password, full_name, email_confirmed_at)
-         VALUES ($1, $2, $3, NOW())
+        `INSERT INTO auth.users (
+           email, encrypted_password, full_name, email_confirmed_at,
+           confirmation_token, confirmation_sent_at
+         )
+         VALUES ($1, $2, $3, NOW(), $4, NOW())
          RETURNING id, email, full_name, email_confirmed_at, created_at, updated_at, last_sign_in_at, is_banned`,
-        [email, hash, fullName ?? null],
+        [normalizedEmail, hash, fullName ?? null, confirmHash],
       );
 
       const user = result.rows[0]!;
@@ -220,25 +305,27 @@ export class AppAuthService {
         [sessionId, user.id, refreshToken, expiresAt],
       );
 
-      const tokens = this.buildTokenPair(user, sessionId, projectRef);
+      const tokens = this.buildTokenPair(user, sessionId, projectRef, [], null);
       tokens.refresh_token = refreshToken;
       return tokens;
     });
   }
 
   async login(
-    projectRef: string,
+    projectIdentifier: string,
     email: string,
     password: string,
+    requestedTenantIdentifier?: string,
   ): Promise<TokenPair> {
-    return this.withProjectClient(projectRef, async (client) => {
-      await this.ensureSchema(client);
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
 
+      const normalizedEmail = email.trim().toLowerCase();
       const result = await client.query<AppUser & { encrypted_password: string }>(
         `SELECT id, email, full_name, email_confirmed_at, created_at, updated_at,
                 last_sign_in_at, is_banned, encrypted_password
-         FROM auth.users WHERE email = $1`,
-        [email],
+         FROM auth.users WHERE LOWER(email) = $1`,
+        [normalizedEmail],
       );
 
       const user = result.rows[0];
@@ -247,6 +334,24 @@ export class AppAuthService {
 
       const valid = await argon2.verify(user.encrypted_password, password);
       if (!valid) throw new UnauthorizedException('Invalid email or password');
+
+      // Load active tenant memberships
+      const memberships = await this.fetchUserMemberships(client, user.id);
+
+      let activeTenant: TenantMembershipSummary | null = null;
+      if (requestedTenantIdentifier) {
+        activeTenant =
+          memberships.find(
+            (m) =>
+              m.tenant_id === requestedTenantIdentifier ||
+              m.tenant_slug === requestedTenantIdentifier,
+          ) ?? null;
+        if (!activeTenant) {
+          throw new ForbiddenException('User is not an active member of the requested tenant');
+        }
+      } else if (memberships.length > 0) {
+        activeTenant = memberships[0]!;
+      }
 
       // Update last_sign_in_at
       await client.query(
@@ -259,25 +364,26 @@ export class AppAuthService {
       const expiresAt = new Date(Date.now() + this.REFRESH_TOKEN_TTL * 1000);
 
       await client.query(
-        `INSERT INTO auth.sessions (id, user_id, refresh_token, refresh_token_expires_at)
-         VALUES ($1, $2, $3, $4)`,
-        [sessionId, user.id, refreshToken, expiresAt],
+        `INSERT INTO auth.sessions (id, user_id, active_tenant_id, refresh_token, refresh_token_expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [sessionId, user.id, activeTenant?.tenant_id ?? null, refreshToken, expiresAt],
       );
 
-      const tokens = this.buildTokenPair(user, sessionId, projectRef);
+      const tokens = this.buildTokenPair(user, sessionId, projectRef, memberships, activeTenant);
       tokens.refresh_token = refreshToken;
       return tokens;
     });
   }
 
-  async refreshToken(projectRef: string, refreshToken: string): Promise<TokenPair> {
-    return this.withProjectClient(projectRef, async (client) => {
+  async refreshToken(projectIdentifier: string, refreshToken: string): Promise<TokenPair> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
       const sessionResult = await client.query<{
         id: string;
         user_id: string;
+        active_tenant_id: string | null;
         refresh_token_expires_at: Date;
       }>(
-        `SELECT id, user_id, refresh_token_expires_at FROM auth.sessions
+        `SELECT id, user_id, active_tenant_id, refresh_token_expires_at FROM auth.sessions
          WHERE refresh_token = $1`,
         [refreshToken],
       );
@@ -299,31 +405,126 @@ export class AppAuthService {
       const user = userResult.rows[0];
       if (!user || user.is_banned) throw new UnauthorizedException('Account not accessible');
 
+      const memberships = await this.fetchUserMemberships(client, user.id);
+      let activeTenant: TenantMembershipSummary | null = null;
+      if (session.active_tenant_id) {
+        activeTenant =
+          memberships.find((m) => m.tenant_id === session.active_tenant_id) ?? null;
+      }
+      if (!activeTenant && memberships.length > 0) {
+        activeTenant = memberships[0]!;
+      }
+
       // Rotate refresh token
       const newRefreshToken = randomBytes(48).toString('base64url');
       const newExpiry = new Date(Date.now() + this.REFRESH_TOKEN_TTL * 1000);
 
       await client.query(
         `UPDATE auth.sessions
-         SET refresh_token = $1, refresh_token_expires_at = $2, updated_at = NOW()
-         WHERE id = $3`,
-        [newRefreshToken, newExpiry, session.id],
+         SET refresh_token = $1, refresh_token_expires_at = $2, active_tenant_id = $3, updated_at = NOW()
+         WHERE id = $4`,
+        [newRefreshToken, newExpiry, activeTenant?.tenant_id ?? null, session.id],
       );
 
-      const tokens = this.buildTokenPair(user, session.id, projectRef);
+      const tokens = this.buildTokenPair(user, session.id, projectRef, memberships, activeTenant);
       tokens.refresh_token = newRefreshToken;
       return tokens;
     });
   }
 
-  async logout(projectRef: string, refreshToken: string): Promise<void> {
-    await this.withProjectClient(projectRef, async (client) => {
+  /**
+   * Switches the authenticated user's active tenant context after server-side membership validation.
+   */
+  async switchTenant(
+    projectIdentifier: string,
+    userId: string,
+    sessionId: string | undefined,
+    targetTenantIdentifier: string,
+  ): Promise<TokenPair> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+
+      const userResult = await client.query<AppUser>(
+        `SELECT id, email, full_name, email_confirmed_at, created_at, updated_at,
+                last_sign_in_at, is_banned
+         FROM auth.users WHERE id = $1`,
+        [userId],
+      );
+      const user = userResult.rows[0];
+      if (!user || user.is_banned) {
+        throw new UnauthorizedException('Account not accessible');
+      }
+
+      const memberships = await this.fetchUserMemberships(client, userId);
+      const targetMembership = memberships.find(
+        (m) => m.tenant_id === targetTenantIdentifier || m.tenant_slug === targetTenantIdentifier,
+      );
+
+      if (!targetMembership) {
+        throw new ForbiddenException(
+          'Access denied: you are not an active member of this tenant',
+        );
+      }
+
+      let effectiveSessionId = sessionId;
+      let refreshToken = randomBytes(48).toString('base64url');
+      const expiresAt = new Date(Date.now() + this.REFRESH_TOKEN_TTL * 1000);
+
+      if (effectiveSessionId) {
+        const updatedSession = await client.query<{ refresh_token: string }>(
+          `UPDATE auth.sessions
+           SET active_tenant_id = $1, refresh_token = $2, refresh_token_expires_at = $3, updated_at = NOW()
+           WHERE id = $4 AND user_id = $5
+           RETURNING refresh_token`,
+          [targetMembership.tenant_id, refreshToken, expiresAt, effectiveSessionId, userId],
+        );
+        if (!updatedSession.rowCount || updatedSession.rowCount === 0) {
+          effectiveSessionId = undefined;
+        }
+      }
+
+      if (!effectiveSessionId) {
+        effectiveSessionId = randomUUID();
+        await client.query(
+          `INSERT INTO auth.sessions (id, user_id, active_tenant_id, refresh_token, refresh_token_expires_at)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [effectiveSessionId, userId, targetMembership.tenant_id, refreshToken, expiresAt],
+        );
+      }
+
+      const tokens = this.buildTokenPair(
+        user,
+        effectiveSessionId,
+        projectRef,
+        memberships,
+        targetMembership,
+      );
+      tokens.refresh_token = refreshToken;
+      return tokens;
+    });
+  }
+
+  async getUserTenants(
+    projectIdentifier: string,
+    userId: string,
+  ): Promise<TenantMembershipSummary[]> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+      return this.fetchUserMemberships(client, userId);
+    });
+  }
+
+  async logout(projectIdentifier: string, refreshToken: string): Promise<void> {
+    await this.withProjectClient(projectIdentifier, async (client) => {
       await client.query('DELETE FROM auth.sessions WHERE refresh_token = $1', [refreshToken]);
     });
   }
 
-  async getUser(projectRef: string, userId: string): Promise<AppUser> {
-    return this.withProjectClient(projectRef, async (client) => {
+  async getUser(
+    projectIdentifier: string,
+    userId: string,
+  ): Promise<AppUser & { tenants?: TenantMembershipSummary[] }> {
+    return this.withProjectClient(projectIdentifier, async (client) => {
       const result = await client.query<AppUser>(
         `SELECT id, email, full_name, email_confirmed_at, created_at, updated_at,
                 last_sign_in_at, is_banned
@@ -331,16 +532,20 @@ export class AppAuthService {
         [userId],
       );
       if (!result.rows[0]) throw new NotFoundException('User not found');
-      return result.rows[0];
+      const memberships = await this.fetchUserMemberships(client, userId);
+      return {
+        ...result.rows[0],
+        tenants: memberships,
+      };
     });
   }
 
   async updateUser(
-    projectRef: string,
+    projectIdentifier: string,
     userId: string,
     data: { full_name?: string; email?: string },
   ): Promise<AppUser> {
-    return this.withProjectClient(projectRef, async (client) => {
+    return this.withProjectClient(projectIdentifier, async (client) => {
       const sets: string[] = [];
       const values: unknown[] = [];
       let idx = 1;
@@ -350,14 +555,14 @@ export class AppAuthService {
         values.push(data.full_name);
       }
       if (data.email !== undefined) {
-        // Check uniqueness
-        const dup = await client.query('SELECT id FROM auth.users WHERE email = $1 AND id != $2', [
-          data.email,
-          userId,
-        ]);
+        const normalizedEmail = data.email.trim().toLowerCase();
+        const dup = await client.query(
+          'SELECT id FROM auth.users WHERE LOWER(email) = $1 AND id != $2',
+          [normalizedEmail, userId],
+        );
         if (dup.rowCount && dup.rowCount > 0) throw new ConflictException('Email already in use');
         sets.push(`email = $${idx++}`);
-        values.push(data.email);
+        values.push(normalizedEmail);
       }
 
       if (sets.length === 0) throw new BadRequestException('Nothing to update');
@@ -375,12 +580,12 @@ export class AppAuthService {
   }
 
   async changePassword(
-    projectRef: string,
+    projectIdentifier: string,
     userId: string,
     currentPassword: string,
     newPassword: string,
   ): Promise<void> {
-    await this.withProjectClient(projectRef, async (client) => {
+    await this.withProjectClient(projectIdentifier, async (client) => {
       const result = await client.query<{ encrypted_password: string }>(
         'SELECT encrypted_password FROM auth.users WHERE id = $1',
         [userId],
@@ -407,13 +612,155 @@ export class AppAuthService {
     });
   }
 
+  async requestPasswordReset(
+    projectIdentifier: string,
+    email: string,
+  ): Promise<{ message: string; recovery_token?: string }> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+      const normalizedEmail = email.trim().toLowerCase();
+
+      const res = await client.query<{ id: string; email: string }>(
+        'SELECT id, email FROM auth.users WHERE LOWER(email) = $1',
+        [normalizedEmail],
+      );
+
+      if (res.rows[0]) {
+        const rawToken = randomBytes(32).toString('base64url');
+        const tokenHash = this.hashToken(rawToken);
+
+        await client.query(
+          `UPDATE auth.users
+           SET reset_password_token = $1, reset_password_sent_at = NOW(), updated_at = NOW()
+           WHERE id = $2`,
+          [tokenHash, res.rows[0].id],
+        );
+
+        await this.mailService?.sendPasswordResetEmail(res.rows[0].email, rawToken).catch(() => {});
+
+        if (this.config.get<string>('NODE_ENV', 'development') !== 'production') {
+          return {
+            message: 'If the email exists, password reset instructions were sent.',
+            recovery_token: rawToken,
+          };
+        }
+      }
+
+      return { message: 'If the email exists, password reset instructions were sent.' };
+    });
+  }
+
+  async resetPassword(
+    projectIdentifier: string,
+    token: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+      const tokenHash = this.hashToken(token);
+
+      const res = await client.query<{ id: string; reset_password_sent_at: Date }>(
+        `SELECT id, reset_password_sent_at
+         FROM auth.users
+         WHERE reset_password_token = $1`,
+        [tokenHash],
+      );
+
+      const user = res.rows[0];
+      if (!user) throw new BadRequestException('Invalid or expired password reset token');
+
+      const oneHourAgo = new Date(Date.now() - 3600 * 1000);
+      if (!user.reset_password_sent_at || user.reset_password_sent_at < oneHourAgo) {
+        throw new BadRequestException('Password reset token has expired');
+      }
+
+      const hash = await argon2.hash(newPassword, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 1,
+      });
+
+      await client.query(
+        `UPDATE auth.users
+         SET encrypted_password = $1,
+             reset_password_token = NULL,
+             reset_password_sent_at = NULL,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [hash, user.id],
+      );
+
+      // Revoke all active sessions on password reset
+      await client.query('DELETE FROM auth.sessions WHERE user_id = $1', [user.id]);
+
+      return { message: 'Password reset successfully' };
+    });
+  }
+
+  async verifyEmail(projectIdentifier: string, token: string): Promise<{ message: string }> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+      const tokenHash = this.hashToken(token);
+
+      const res = await client.query<{ id: string }>(
+        `UPDATE auth.users
+         SET email_confirmed_at = NOW(),
+             confirmation_token = NULL,
+             updated_at = NOW()
+         WHERE confirmation_token = $1
+         RETURNING id`,
+        [tokenHash],
+      );
+
+      if (!res.rowCount || res.rowCount === 0) {
+        throw new BadRequestException('Invalid email confirmation token');
+      }
+
+      return { message: 'Email confirmed successfully' };
+    });
+  }
+
+  async resendVerification(
+    projectIdentifier: string,
+    userId: string,
+  ): Promise<{ message: string; verification_token?: string }> {
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
+      const res = await client.query<{ id: string; email: string }>(
+        'SELECT id, email FROM auth.users WHERE id = $1',
+        [userId],
+      );
+      const user = res.rows[0];
+      if (!user) throw new NotFoundException('User not found');
+
+      const rawToken = randomBytes(32).toString('base64url');
+      const tokenHash = this.hashToken(rawToken);
+
+      await client.query(
+        `UPDATE auth.users
+         SET confirmation_token = $1, confirmation_sent_at = NOW(), updated_at = NOW()
+         WHERE id = $2`,
+        [tokenHash, user.id],
+      );
+
+      await this.mailService?.sendVerificationEmail(user.email, rawToken).catch(() => {});
+
+      if (this.config.get<string>('NODE_ENV', 'development') !== 'production') {
+        return { message: 'Verification email sent', verification_token: rawToken };
+      }
+
+      return { message: 'Verification email sent' };
+    });
+  }
+
   async listUsers(
-    projectRef: string,
+    projectIdentifier: string,
     page = 1,
     limit = 20,
   ): Promise<{ users: AppUser[]; total: number }> {
-    return this.withProjectClient(projectRef, async (client) => {
-      await this.ensureSchema(client);
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
       const offset = (page - 1) * limit;
       const [usersResult, countResult] = await Promise.all([
         client.query<AppUser>(
@@ -432,8 +779,8 @@ export class AppAuthService {
     });
   }
 
-  async banUser(projectRef: string, userId: string, banned: boolean): Promise<void> {
-    await this.withProjectClient(projectRef, async (client) => {
+  async banUser(projectIdentifier: string, userId: string, banned: boolean): Promise<void> {
+    await this.withProjectClient(projectIdentifier, async (client) => {
       await client.query(
         'UPDATE auth.users SET is_banned = $1, updated_at = NOW() WHERE id = $2',
         [banned, userId],
@@ -444,17 +791,17 @@ export class AppAuthService {
     });
   }
 
-  async deleteUser(projectRef: string, userId: string): Promise<void> {
-    await this.withProjectClient(projectRef, async (client) => {
+  async deleteUser(projectIdentifier: string, userId: string): Promise<void> {
+    await this.withProjectClient(projectIdentifier, async (client) => {
       await client.query('DELETE FROM auth.users WHERE id = $1', [userId]);
     });
   }
 
   async getStats(
-    projectRef: string,
+    projectIdentifier: string,
   ): Promise<{ totalUsers: number; confirmedUsers: number; dailyActiveUsers: number }> {
-    return this.withProjectClient(projectRef, async (client) => {
-      await this.ensureSchema(client);
+    return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
+      await this.ensureSchema(client, projectRef);
       const res = await client.query<{
         total: string;
         confirmed: string;

@@ -15,6 +15,7 @@ import { AuditModule } from './audit/audit.module';
 import { BootstrapModule } from './bootstrap/bootstrap.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ApiGatewayModule } from './api-gateway/api-gateway.module';
+import { TenantsModule } from './tenants/tenants.module';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import redisConfig from './config/redis.config';
@@ -64,6 +65,7 @@ import minioConfig from './config/minio.config';
     BootstrapModule,
     RealtimeModule,
     ApiGatewayModule,
+    TenantsModule,
   ],
   providers: [
     {

@@ -159,6 +159,22 @@ export class DatabaseStudioService {
 
     await this.connectionManager.withClient(credentials, async (client) => {
       await client.query(sql);
+      // Grant access to runtime roles so RLS policies control row visibility rather than table-level denies
+      await client.query(`
+        DO $$
+        DECLARE
+          r RECORD;
+        BEGIN
+          FOR r IN SELECT rolname FROM pg_roles WHERE rolname = 'authenticated' OR rolname LIKE 'proj_%_authenticated' LOOP
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "${schema}"."${table}" TO %I', r.rolname);
+          END LOOP;
+          FOR r IN SELECT rolname FROM pg_roles WHERE rolname = 'anon' OR rolname LIKE 'proj_%_anon' LOOP
+            EXECUTE format('GRANT SELECT ON TABLE "${schema}"."${table}" TO %I', r.rolname);
+          END LOOP;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END
+        $$;
+      `).catch(() => {});
     });
   }
 
@@ -459,15 +475,142 @@ export class DatabaseStudioService {
     schema: string,
     table: string,
     enabled: boolean,
+    force = false,
   ): Promise<void> {
     const safeSchema = this.sanitizeIdentifier(schema);
     const safeTable = this.sanitizeIdentifier(table);
-    const sql = enabled
-      ? `ALTER TABLE "${safeSchema}"."${safeTable}" ENABLE ROW LEVEL SECURITY;`
-      : `ALTER TABLE "${safeSchema}"."${safeTable}" DISABLE ROW LEVEL SECURITY;`;
+    const statements = [
+      enabled
+        ? `ALTER TABLE "${safeSchema}"."${safeTable}" ENABLE ROW LEVEL SECURITY;`
+        : `ALTER TABLE "${safeSchema}"."${safeTable}" DISABLE ROW LEVEL SECURITY;`,
+    ];
+
+    if (enabled && force) {
+      statements.push(`ALTER TABLE "${safeSchema}"."${safeTable}" FORCE ROW LEVEL SECURITY;`);
+    } else if (!enabled || !force) {
+      statements.push(`ALTER TABLE "${safeSchema}"."${safeTable}" NO FORCE ROW LEVEL SECURITY;`);
+    }
 
     await this.connectionManager.withClient(credentials, async (client) => {
-      await client.query(sql);
+      for (const stmt of statements) {
+        await client.query(stmt);
+      }
+    });
+  }
+
+  /**
+   * Apply a standardized Universal Multi-Tenant RLS policy template onto a table.
+   */
+  async applyTenantRlsTemplate(
+    credentials: ProjectDbCredentials,
+    schema: string,
+    table: string,
+    options: {
+      template: 'tenant_isolation' | 'tenant_rbac' | 'public_read_tenant_write' | 'global_read';
+      tenantColumn?: string;
+      resourceName?: string;
+    },
+  ): Promise<{ appliedPolicies: string[] }> {
+    const safeSchema = this.sanitizeIdentifier(schema);
+    const safeTable = this.sanitizeIdentifier(table);
+    const tenantCol = this.sanitizeIdentifier(options.tenantColumn || 'tenant_id');
+    const resourceName = (options.resourceName || safeTable).replace(/'/g, "''");
+
+    return this.connectionManager.withClient(credentials, async (client) => {
+      await client.query(`ALTER TABLE "${safeSchema}"."${safeTable}" ENABLE ROW LEVEL SECURITY;`);
+
+      // Grant runtime table permissions cleanly so PostgreSQL evaluates RLS policies instead of blocking at table level
+      await client.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN SELECT rolname FROM pg_roles WHERE rolname = 'authenticated' OR rolname LIKE 'proj_%_authenticated' LOOP
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "${safeSchema}"."${safeTable}" TO %I', r.rolname);
+          END LOOP;
+          FOR r IN SELECT rolname FROM pg_roles WHERE rolname = 'anon' OR rolname LIKE 'proj_%_anon' LOOP
+            EXECUTE format('GRANT SELECT ON TABLE "${safeSchema}"."${safeTable}" TO %I', r.rolname);
+          END LOOP;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END $$;
+      `).catch(() => {});
+
+      const appliedPolicies: string[] = [];
+
+      const createOrReplace = async (name: string, cmd: string, expr: string, isCheckOnly = false) => {
+        const safeName = name.replace(/"/g, '""');
+        await client.query(`DROP POLICY IF EXISTS "${safeName}" ON "${safeSchema}"."${safeTable}";`);
+        const clause = isCheckOnly ? `WITH CHECK (${expr})` : cmd === 'UPDATE' ? `USING (${expr}) WITH CHECK (${expr})` : `USING (${expr})`;
+        await client.query(`CREATE POLICY "${safeName}" ON "${safeSchema}"."${safeTable}" FOR ${cmd} ${clause};`);
+        appliedPolicies.push(safeName);
+      };
+
+      if (options.template === 'tenant_isolation') {
+        await createOrReplace(
+          `${safeTable}_tenant_select`,
+          'SELECT',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+        );
+        await createOrReplace(
+          `${safeTable}_tenant_insert`,
+          'INSERT',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+          true,
+        );
+        await createOrReplace(
+          `${safeTable}_tenant_update`,
+          'UPDATE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+        );
+        await createOrReplace(
+          `${safeTable}_tenant_delete`,
+          'DELETE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+        );
+      } else if (options.template === 'tenant_rbac') {
+        await createOrReplace(
+          `${safeTable}_rbac_select`,
+          'SELECT',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.has_permission('${resourceName}', 'read'))`,
+        );
+        await createOrReplace(
+          `${safeTable}_rbac_insert`,
+          'INSERT',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.has_permission('${resourceName}', 'create'))`,
+          true,
+        );
+        await createOrReplace(
+          `${safeTable}_rbac_update`,
+          'UPDATE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.has_permission('${resourceName}', 'update'))`,
+        );
+        await createOrReplace(
+          `${safeTable}_rbac_delete`,
+          'DELETE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.has_permission('${resourceName}', 'delete'))`,
+        );
+      } else if (options.template === 'public_read_tenant_write') {
+        await createOrReplace(`${safeTable}_public_select`, 'SELECT', `TRUE`);
+        await createOrReplace(
+          `${safeTable}_tenant_insert`,
+          'INSERT',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+          true,
+        );
+        await createOrReplace(
+          `${safeTable}_tenant_update`,
+          'UPDATE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+        );
+        await createOrReplace(
+          `${safeTable}_tenant_delete`,
+          'DELETE',
+          `auth.is_service_role() OR ("${tenantCol}" = auth.tenant_id() AND auth.is_tenant_member())`,
+        );
+      } else if (options.template === 'global_read') {
+        await createOrReplace(`${safeTable}_global_read`, 'SELECT', `auth.uid() IS NOT NULL OR auth.is_service_role()`);
+      }
+
+      return { appliedPolicies };
     });
   }
 }

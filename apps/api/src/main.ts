@@ -42,6 +42,8 @@ async function bootstrap() {
       'Authorization',
       'X-Request-ID',
       'X-CSRF-Token',
+      'X-Tenant-ID',
+      'x-tenant-id',
       'apikey',
       'Range',
       'Prefer',

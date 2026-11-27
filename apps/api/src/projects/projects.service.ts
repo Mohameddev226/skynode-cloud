@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DatabaseProvisionerService } from './provisioning/database-provisioner.service';
 import { CreateProjectDto, UpdateProjectDto, CreateProjectApiKeyDto } from './dto/project.dto';
 import { encrypt, decrypt } from '../common/utils/crypto.util';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,6 +75,22 @@ export class ProjectsService {
   }
 
   /**
+   * Derives a cryptographically verifiable default project API key using server HMAC secret.
+   * Ensures existing and new projects have working non-guessable keys in the dashboard config.
+   */
+  private deriveDefaultApiKey(type: 'anon' | 'service_role', projectId: string, ref: string): string {
+    const secret =
+      this.config.get<string>('ENCRYPTION_KEY') ||
+      this.config.get<string>('JWT_SECRET') ||
+      'skynode-default-hmac-secret';
+    const sig = createHmac('sha256', secret)
+      .update(`${type}:${projectId}:${ref}`)
+      .digest('hex')
+      .slice(0, 32);
+    return `sky_${type}_${ref}_${sig}`;
+  }
+
+  /**
    * Create and provision a new project.
    */
   async create(ownerId: string, dto: CreateProjectDto) {
@@ -90,9 +106,9 @@ export class ProjectsService {
     // 2. Encrypt database password
     const dbPasswordEnc = encrypt(provisionResult.dbPasswordPlain);
 
-    // 3. Generate default API keys
-    const anonKeyInfo = this.generateApiKey('anon', ref);
-    const serviceKeyInfo = this.generateApiKey('service_role', ref);
+    // 3. Generate default API keys (deterministic HMAC-signed keys on creation so config remains verifiable)
+    const tempAnon = this.generateApiKey('anon', ref);
+    const tempService = this.generateApiKey('service_role', ref);
 
     // 4. Create Project record and default API keys in transaction
     const project = await this.prisma.$transaction(async (tx) => {
@@ -114,24 +130,26 @@ export class ProjectsService {
       });
 
       // Default publishable anon key
+      const derivedAnon = this.deriveDefaultApiKey('anon', created.id, ref);
       await tx.apiKey.create({
         data: {
           projectId: created.id,
           name: 'Default Anon Key',
           type: 'PUBLISHABLE',
-          keyPrefix: anonKeyInfo.prefix,
-          keyHash: anonKeyInfo.hash,
+          keyPrefix: derivedAnon.slice(0, 12),
+          keyHash: createHash('sha256').update(derivedAnon).digest('hex'),
         },
       });
 
       // Default secret service_role key
+      const derivedService = this.deriveDefaultApiKey('service_role', created.id, ref);
       await tx.apiKey.create({
         data: {
           projectId: created.id,
           name: 'Default Service Role Key',
           type: 'SECRET',
-          keyPrefix: serviceKeyInfo.prefix,
-          keyHash: serviceKeyInfo.hash,
+          keyPrefix: derivedService.slice(0, 12),
+          keyHash: createHash('sha256').update(derivedService).digest('hex'),
         },
       });
 
@@ -147,22 +165,22 @@ export class ProjectsService {
         },
       });
 
-      return created;
+      return { created, anonKey: derivedAnon, serviceKey: derivedService };
     });
 
-    this.logger.log(`Project ${project.name} (${project.ref}) created and active`);
+    this.logger.log(`Project ${project.created.name} (${project.created.ref}) created and active`);
 
     return {
-      id: project.id,
-      ref: project.ref,
-      slug: project.slug,
-      name: project.name,
-      description: project.description,
-      status: project.status.toLowerCase(),
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-      anonKey: anonKeyInfo.key,
-      serviceKey: serviceKeyInfo.key,
+      id: project.created.id,
+      ref: project.created.ref,
+      slug: project.created.slug,
+      name: project.created.name,
+      description: project.created.description,
+      status: project.created.status.toLowerCase(),
+      createdAt: project.created.createdAt,
+      updatedAt: project.created.updatedAt,
+      anonKey: project.anonKey || tempAnon.key,
+      serviceKey: project.serviceKey || tempService.key,
     };
   }
 
@@ -323,14 +341,83 @@ export class ProjectsService {
       this.config.get<string>('APP_URL') ||
       `http://localhost:${this.config.get<string>('APP_PORT', '4000')}`;
 
-    // Return baseUrl and keys
     return {
-      baseUrl: `${publicBaseUrl}/api/v1/projects/${project.ref}/rest`,
+      baseUrl: `${publicBaseUrl}/api/v1/projects/${project.ref}`,
       ref: project.ref,
       slug: project.slug,
-      anonKey: `sky_anon_${project.ref}_active`,
-      serviceKey: `sky_service_${project.ref}_active`,
+      anonKey: this.deriveDefaultApiKey('anon', project.id, project.ref),
+      serviceKey: this.deriveDefaultApiKey('service_role', project.id, project.ref),
     };
+  }
+
+  /**
+   * Validates an API key (anon or service_role) against a project.
+   * Checks stored SHA-256 hashes in api_keys and cryptographically derived defaults.
+   */
+  async validateApiKey(
+    identifier: string,
+    rawKey: string,
+  ): Promise<{ projectId: string; ref: string; role: 'anon' | 'service_role' } | null> {
+    if (!rawKey || typeof rawKey !== 'string') return null;
+
+    const projectRecord = await this.prisma.project.findFirst({
+      where: {
+        status: { not: 'DELETED' },
+        OR: getProjectOrConditions(identifier),
+      },
+      select: { id: true, ref: true },
+    });
+
+    if (!projectRecord) return null;
+
+    const keyHash = createHash('sha256').update(rawKey).digest('hex');
+
+    if (this.prisma.apiKey?.findFirst) {
+      const matched = await this.prisma.apiKey.findFirst({
+        where: {
+          projectId: projectRecord.id,
+          keyHash,
+        },
+        select: { id: true, type: true, revoked: true, expiresAt: true },
+      });
+
+      if (matched) {
+        if (matched.revoked) return null;
+        if (matched.expiresAt && matched.expiresAt < new Date()) return null;
+
+        // Non-blocking audit update
+        if (this.prisma.apiKey.update) {
+          this.prisma.apiKey
+            .update({ where: { id: matched.id }, data: { lastUsedAt: new Date() } })
+            .catch(() => {});
+        }
+
+        return {
+          projectId: projectRecord.id,
+          ref: projectRecord.ref,
+          role: matched.type === 'SECRET' ? 'service_role' : 'anon',
+        };
+      }
+    }
+
+    // Legacy fallback: check cryptographically signed HMAC default key (non-guessable)
+    const derivedAnon = this.deriveDefaultApiKey('anon', projectRecord.id, projectRecord.ref);
+    const derivedService = this.deriveDefaultApiKey('service_role', projectRecord.id, projectRecord.ref);
+
+    const safeEquals = (a: string, b: string) => {
+      const bufA = Buffer.from(a);
+      const bufB = Buffer.from(b);
+      return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+    };
+
+    if (safeEquals(rawKey, derivedAnon)) {
+      return { projectId: projectRecord.id, ref: projectRecord.ref, role: 'anon' };
+    }
+    if (safeEquals(rawKey, derivedService)) {
+      return { projectId: projectRecord.id, ref: projectRecord.ref, role: 'service_role' };
+    }
+
+    return null;
   }
 
   /**

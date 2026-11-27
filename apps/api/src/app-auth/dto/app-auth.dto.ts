@@ -21,11 +21,22 @@ export class AppLoginDto {
 
   @IsString()
   password!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  tenant_id?: string;
 }
 
 export class AppRefreshDto {
   @IsString()
   refresh_token!: string;
+}
+
+export class AppSwitchTenantDto {
+  @IsString()
+  @MaxLength(128)
+  tenant_id!: string;
 }
 
 export class AppUpdateProfileDto {
@@ -62,4 +73,9 @@ export class AppResetPasswordDto {
   @MinLength(8)
   @MaxLength(72)
   new_password!: string;
+}
+
+export class AppVerifyEmailDto {
+  @IsString()
+  token!: string;
 }

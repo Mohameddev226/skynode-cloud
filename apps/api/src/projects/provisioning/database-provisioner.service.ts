@@ -2,6 +2,7 @@ import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import { Client, Pool } from 'pg';
 import { randomBytes } from 'crypto';
+import { ensureProjectDataPlaneSchema } from './project-schema.initializer';
 
 export interface ProvisionResult {
   ref: string;
@@ -159,14 +160,16 @@ export class DatabaseProvisionerService {
         ALTER DEFAULT PRIVILEGES IN SCHEMA public, auth, storage GRANT ALL ON SEQUENCES TO "${adminRole}";
       `);
 
-      // Grant permissions to authenticated & anon roles
-      await projectDbClient.query(`
-        GRANT USAGE ON SCHEMA public TO "${authRole}", "${anonRole}";
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${authRole}";
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "${anonRole}";
-      `);
+      // Initialize universal multi-tenant data plane tables, RLS helper functions, and runtime grants
+      await ensureProjectDataPlaneSchema(projectDbClient, {
+        ref,
+        adminRole,
+        authRole,
+        anonRole,
+        logger: this.logger,
+      });
 
-      this.logger.log(`Initialized schemas & roles for project ${ref}`);
+      this.logger.log(`Initialized schemas, multi-tenant primitives & roles for project ${ref}`);
     } catch (err: any) {
       this.logger.warn(`Project database init for ${dbName}: ${err.message}. Project will use shared database connection.`);
     } finally {

@@ -245,10 +245,30 @@ export class DatabaseStudioController {
     @Param('identifier') identifier: string,
     @Param('tableName') tableName: string,
     @Query('schema') schema = 'public',
-    @Body() dto: { enabled: boolean },
+    @Body() dto: { enabled: boolean; force?: boolean },
   ) {
     const creds = await this.getCredentials(identifier, userId);
-    await this.studioService.setRls(creds, schema, tableName, dto.enabled);
+    await this.studioService.setRls(creds, schema, tableName, dto.enabled, dto.force ?? false);
     return { data: { message: `RLS ${dto.enabled ? 'enabled' : 'disabled'} on ${tableName}` } };
+  }
+
+  @Post('tables/:tableName/rls/template')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Apply a universal multi-tenant RLS policy template to a table' })
+  async applyRlsTemplate(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body()
+    dto: {
+      template: 'tenant_isolation' | 'tenant_rbac' | 'public_read_tenant_write' | 'global_read';
+      tenantColumn?: string;
+      resourceName?: string;
+    },
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const result = await this.studioService.applyTenantRlsTemplate(creds, schema, tableName, dto);
+    return { data: result };
   }
 }

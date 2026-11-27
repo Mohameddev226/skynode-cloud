@@ -10,6 +10,14 @@ export interface ProjectDbCredentials {
   password: string;
 }
 
+export interface TenantExecutionContext {
+  apiRole: 'anon' | 'authenticated' | 'service_role';
+  userId?: string | null;
+  tenantId?: string | null;
+  tenantRole?: string | null;
+  claims?: Record<string, unknown>;
+}
+
 @Injectable()
 export class ProjectConnectionManager implements OnModuleDestroy {
   private readonly logger = new Logger(ProjectConnectionManager.name);
@@ -91,37 +99,119 @@ export class ProjectConnectionManager implements OnModuleDestroy {
   }
 
   /**
+   * Acquires a connected client from the project pool, falling back to defaultPool ONLY
+   * if establishing the direct project DB connection fails (e.g. shared cloud hosting).
+   */
+  private async acquireClient(credentials: ProjectDbCredentials): Promise<PoolClient> {
+    const pool = this.getPool(credentials);
+    try {
+      return await pool.connect();
+    } catch (connErr: any) {
+      this.logger.warn(
+        `Direct tenant DB connection failed for ${credentials.database} (${connErr.message}). Attempting fallback to main database connection...`,
+      );
+      if (this.defaultPool) {
+        return await this.defaultPool.connect();
+      }
+      throw connErr;
+    }
+  }
+
+  /**
    * Executes a callback within a managed client connection for a project.
-   * If tenant-specific database or credentials fail (e.g., on cloud single-DB hosting),
-   * falls back to the default database connection.
+   * Query errors inside `fn` propagate normally without falling back to defaultPool.
    */
   async withClient<T>(
     credentials: ProjectDbCredentials,
     fn: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
-    const pool = this.getPool(credentials);
-    let client: PoolClient | null = null;
+    const client = await this.acquireClient(credentials);
     try {
-      client = await pool.connect();
       return await fn(client);
-    } catch (err: any) {
-      this.logger.warn(
-        `Direct tenant DB connection failed for ${credentials.database} (${err.message}). Attempting fallback to main database connection...`,
-      );
-      if (this.defaultPool) {
-        const fallbackClient = await this.defaultPool.connect();
-        try {
-          return await fn(fallbackClient);
-        } finally {
-          fallbackClient.release();
-        }
-      }
-      throw err;
     } finally {
-      if (client) {
-        client.release();
-      }
+      client.release();
     }
+  }
+
+  /**
+   * Executes a callback inside an explicit PostgreSQL transaction with
+   * transaction-scoped JWT/tenant claims (`set_config(..., true)`) and
+   * unprivileged runtime role switching (`SET LOCAL ROLE`).
+   *
+   * Because all context uses `LOCAL` transaction scope, state never leaks
+   * across pooled connections even under high concurrency.
+   */
+  async withTenantTransaction<T>(
+    credentials: ProjectDbCredentials,
+    projectRef: string,
+    context: TenantExecutionContext,
+    fn: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    return this.withClient(credentials, async (client) => {
+      await client.query('BEGIN');
+      try {
+        const claimsPayload = JSON.stringify({
+          sub: context.userId ?? null,
+          tenant_id: context.tenantId ?? null,
+          role: context.tenantRole ?? context.apiRole,
+          api_role: context.apiRole,
+          ...(context.claims ?? {}),
+        });
+
+        await client.query(
+          `SELECT
+            set_config('request.jwt.claim.sub', $1, true),
+            set_config('request.jwt.claim.tenant_id', $2, true),
+            set_config('request.jwt.claim.role', $3, true),
+            set_config('request.jwt.claim.api_role', $4, true),
+            set_config('request.jwt.claims', $5, true)`,
+          [
+            context.userId ?? '',
+            context.tenantId ?? '',
+            context.tenantRole ?? context.apiRole,
+            context.apiRole,
+            claimsPayload,
+          ],
+        );
+
+        // Drop privileges from DB owner to unprivileged role so PostgreSQL RLS is enforced.
+        // Service role remains on admin/owner connection to allow privileged operations.
+        if (context.apiRole !== 'service_role') {
+          const safeRef = projectRef.replace(/[^a-zA-Z0-9_]/g, '');
+          const candidateRoles =
+            context.apiRole === 'authenticated'
+              ? [`proj_${safeRef}_authenticated`, 'authenticated']
+              : [`proj_${safeRef}_anon`, 'anon'];
+
+          let switched = false;
+          for (const roleName of candidateRoles) {
+            if (!/^[a-zA-Z0-9_]+$/.test(roleName)) continue;
+            await client.query('SAVEPOINT skynode_role_sp');
+            try {
+              await client.query(`SET LOCAL ROLE "${roleName}"`);
+              await client.query('RELEASE SAVEPOINT skynode_role_sp');
+              switched = true;
+              break;
+            } catch {
+              await client.query('ROLLBACK TO SAVEPOINT skynode_role_sp');
+            }
+          }
+
+          if (!switched) {
+            this.logger.debug(
+              `Could not switch to unprivileged role for ${projectRef} (${context.apiRole}); running with injected session claims.`,
+            );
+          }
+        }
+
+        const result = await fn(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      }
+    });
   }
 
   /**
