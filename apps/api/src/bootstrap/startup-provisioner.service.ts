@@ -181,12 +181,21 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
       for (const project of projects) {
         try {
           const { ref, dbName, dbUser, dbPasswordEnc, name } = project;
-          const dbPassword = decrypt(dbPasswordEnc);
+          let dbPassword: string | null = null;
+          try {
+            dbPassword = decrypt(dbPasswordEnc);
+          } catch (decErr: any) {
+            this.logger.warn(`[${name}] Could not decrypt dbPasswordEnc (${decErr.message}); skipping role password update.`);
+          }
           const authRole = `proj_${ref}_authenticated`;
           const anonRole = `proj_${ref}_anon`;
 
           // Ensure roles
-          await this.ensureRole(superClient, dbUser, true, dbPassword);
+          if (dbPassword) {
+            await this.ensureRole(superClient, dbUser, true, dbPassword);
+          } else {
+            await this.ensureRole(superClient, dbUser, false, null);
+          }
           await this.ensureRole(superClient, authRole, false, null);
           await this.ensureRole(superClient, anonRole, false, null);
 

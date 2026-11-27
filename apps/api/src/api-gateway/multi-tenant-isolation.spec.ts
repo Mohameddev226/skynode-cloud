@@ -4,6 +4,10 @@ import { TenantApiGuard, ResolvedApiContext } from './guards/tenant-api.guard';
 import { ApiGatewayService } from './api-gateway.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ProjectConnectionManager } from '../database-studio/project-connection.manager';
+import {
+  ensureProjectDataPlaneSchema,
+  clearProjectSchemaInitCache,
+} from '../projects/provisioning/project-schema.initializer';
 
 /**
  * Security & Isolation Test Suite covering the Multi-Tenant Threat Matrix:
@@ -432,6 +436,60 @@ describe('Universal Multi-Tenant Security & Isolation Suite', () => {
       expect(wsA.send).toHaveBeenCalledTimes(1);
       expect(wsB.send).not.toHaveBeenCalled();
       expect(wsAnon.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('4. Schema Init Concurrency & Connection Fallback Resilience', () => {
+    it('coalesces parallel ensureProjectDataPlaneSchema calls and skips repeated hot-path DDL', async () => {
+      clearProjectSchemaInitCache('pconcurrent1');
+      const ddlCalls: string[] = [];
+      const mockSchemaClient = {
+        query: jest.fn(async (sql: string) => {
+          ddlCalls.push(sql.trim().split('\n')[0] || '');
+          // Simulate slow PostgreSQL DDL so parallel calls overlap cleanly
+          await new Promise((r) => setTimeout(r, 15));
+          return { rows: [] };
+        }),
+      };
+
+      // Launch two concurrent calls (mirrors auth/admin/users + auth/admin/stats in parallel)
+      await Promise.all([
+        ensureProjectDataPlaneSchema(mockSchemaClient, { ref: 'pconcurrent1' }),
+        ensureProjectDataPlaneSchema(mockSchemaClient, { ref: 'pconcurrent1' }),
+      ]);
+
+      const initCallCount = ddlCalls.length;
+      expect(ddlCalls[0]).toContain('pg_advisory_lock');
+      expect(ddlCalls[ddlCalls.length - 1]).toContain('pg_advisory_unlock');
+
+      // Subsequent call hits verified cache -> zero extra DDL queries
+      await ensureProjectDataPlaneSchema(mockSchemaClient, { ref: 'pconcurrent1' });
+      expect(ddlCalls.length).toBe(initCallCount);
+      clearProjectSchemaInitCache('pconcurrent1');
+    });
+
+    it('caches unreachable project DBs and routes subsequent queries directly to defaultPool', async () => {
+      const connManager = new ProjectConnectionManager({ get: jest.fn() } as any);
+      const fallbackClient = { query: jest.fn(async () => ({ rows: [{ ok: 1 }] })), release: jest.fn() };
+      const connectDefaultSpy = jest.fn().mockResolvedValue(fallbackClient);
+      (connManager as any).defaultPool = { connect: connectDefaultSpy, end: jest.fn() };
+
+      const projectConnectSpy = jest
+        .fn()
+        .mockRejectedValue(new Error('database "skynode_proj_missing" does not exist'));
+      jest.spyOn(connManager, 'getPool').mockReturnValue({
+        connect: projectConnectSpy,
+      } as any);
+
+      // Call 1: attempts project pool -> fails -> falls back to defaultPool
+      await connManager.withClient(creds, (c) => c.query('SELECT 1'));
+      expect(projectConnectSpy).toHaveBeenCalledTimes(1);
+      expect(connectDefaultSpy).toHaveBeenCalledTimes(1);
+
+      // Call 2: skips unreachable project pool immediately and goes straight to defaultPool
+      await connManager.withClient(creds, (c) => c.query('SELECT 1'));
+      expect(projectConnectSpy).toHaveBeenCalledTimes(1);
+      expect(connectDefaultSpy).toHaveBeenCalledTimes(2);
     });
   });
 });

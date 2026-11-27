@@ -39,6 +39,7 @@ export class DatabaseStudioController {
       database: dbConfig.database,
       user: dbConfig.user,
       password: dbConfig.password,
+      forceFallback: dbConfig.forceFallback,
     };
   }
 

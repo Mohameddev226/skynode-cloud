@@ -436,7 +436,17 @@ export class ProjectsService {
       throw new NotFoundException(`Project "${identifier}" not found`);
     }
 
-    const passwordPlain = decrypt(projectRecord.dbPasswordEnc);
+    let passwordPlain = '';
+    let forceFallback = false;
+    try {
+      passwordPlain = decrypt(projectRecord.dbPasswordEnc);
+    } catch (decErr: any) {
+      this.logger.warn(
+        `Could not decrypt dbPasswordEnc for project ${projectRecord.ref} (${decErr?.message}); using shared DB fallback.`,
+      );
+      forceFallback = true;
+    }
+
     const connectionUri = `postgresql://${projectRecord.dbUser}:${passwordPlain}@${projectRecord.dbHost}:${projectRecord.dbPort}/${projectRecord.dbName}`;
 
     return {
@@ -445,6 +455,7 @@ export class ProjectsService {
       database: projectRecord.dbName,
       user: projectRecord.dbUser,
       password: passwordPlain,
+      forceFallback,
       connectionUri,
     };
   }
@@ -464,7 +475,17 @@ export class ProjectsService {
       throw new NotFoundException(`Project "${identifier}" not found`);
     }
 
-    const passwordPlain = decrypt(projectRecord.dbPasswordEnc);
+    let passwordPlain = '';
+    let forceFallback = false;
+    try {
+      passwordPlain = decrypt(projectRecord.dbPasswordEnc);
+    } catch (decErr: any) {
+      this.logger.warn(
+        `Could not decrypt dbPasswordEnc for project ${projectRecord.ref} (${decErr?.message}); using shared DB fallback.`,
+      );
+      forceFallback = true;
+    }
+
     return {
       id: projectRecord.id,
       ref: projectRecord.ref,
@@ -475,6 +496,7 @@ export class ProjectsService {
       database: projectRecord.dbName,
       user: projectRecord.dbUser,
       password: passwordPlain,
+      forceFallback,
     };
   }
 

@@ -6,6 +6,8 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  InternalServerErrorException,
+  HttpException,
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -92,6 +94,23 @@ export class AppAuthService {
     });
     if (!project) throw new NotFoundException(`Project ${identifier} not found`);
 
+    let passwordPlain = '';
+    let forceFallback = false;
+    try {
+      passwordPlain = decrypt(project.dbPasswordEnc);
+    } catch (decErr: any) {
+      if (this.connManager.hasFallbackPool?.()) {
+        this.logger.warn(
+          `Could not decrypt dbPasswordEnc for project ${project.ref} (${decErr?.message}); falling back to shared DB pool.`,
+        );
+        forceFallback = true;
+      } else {
+        throw new InternalServerErrorException(
+          'Unable to decrypt project database credentials. Check ENCRYPTION_KEY configuration.',
+        );
+      }
+    }
+
     return {
       id: project.id,
       ref: project.ref,
@@ -101,7 +120,8 @@ export class AppAuthService {
         port: project.dbPort,
         database: project.dbName,
         user: project.dbUser,
-        password: decrypt(project.dbPasswordEnc),
+        password: passwordPlain,
+        forceFallback,
       },
     };
   }
@@ -111,7 +131,18 @@ export class AppAuthService {
     fn: (client: PoolClient, resolvedRef: string) => Promise<T>,
   ): Promise<T> {
     const resolved = await this.resolveProject(projectIdentifier);
-    return this.connManager.withClient(resolved.creds, (client) => fn(client, resolved.ref));
+    try {
+      return await this.connManager.withClient(resolved.creds, (client) => fn(client, resolved.ref));
+    } catch (err: any) {
+      if (err instanceof HttpException) throw err;
+      this.logger.error(
+        `AppAuth database operation failed for project ${resolved.ref}: [${err?.code || 'ERR'}] ${err?.message}`,
+        err?.stack,
+      );
+      throw new InternalServerErrorException(
+        err?.message ? `Authentication database error: ${err.message}` : 'Authentication database error',
+      );
+    }
   }
 
   private signAccessToken(payload: Record<string, unknown>, projectRef: string): string {
@@ -762,15 +793,15 @@ export class AppAuthService {
     return this.withProjectClient(projectIdentifier, async (client, projectRef) => {
       await this.ensureSchema(client, projectRef);
       const offset = (page - 1) * limit;
-      const [usersResult, countResult] = await Promise.all([
-        client.query<AppUser>(
-          `SELECT id, email, full_name, email_confirmed_at, created_at, updated_at,
-                  last_sign_in_at, is_banned
-           FROM auth.users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-          [limit, offset],
-        ),
-        client.query<{ count: string }>('SELECT COUNT(*)::text as count FROM auth.users'),
-      ]);
+      const usersResult = await client.query<AppUser>(
+        `SELECT id, email, full_name, email_confirmed_at, created_at, updated_at,
+                last_sign_in_at, is_banned
+         FROM auth.users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+        [limit, offset],
+      );
+      const countResult = await client.query<{ count: string }>(
+        'SELECT COUNT(*)::text as count FROM auth.users',
+      );
 
       return {
         users: usersResult.rows,

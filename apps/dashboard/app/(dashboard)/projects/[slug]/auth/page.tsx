@@ -80,17 +80,17 @@ export default function AuthPage() {
   async function fetchData() {
     setLoading(true);
     setError(null);
-    const [usersRes, statsRes] = await Promise.all([
-      api.get<UserListResponse>(`/api/v1/projects/${slug}/auth/admin/users`),
-      api.get<AuthStats>(`/api/v1/projects/${slug}/auth/admin/stats`),
-    ]);
+    const usersRes = await api.get<UserListResponse>(`/api/v1/projects/${slug}/auth/admin/users`);
 
     if (!usersRes.success) {
       setError(usersRes.error?.message ?? 'Failed to load users');
-    } else {
-      setUsers(usersRes.data?.users ?? []);
-      setStats(statsRes.data ?? null);
+      setLoading(false);
+      return;
     }
+
+    setUsers(usersRes.data?.users ?? []);
+    const statsRes = await api.get<AuthStats>(`/api/v1/projects/${slug}/auth/admin/stats`);
+    setStats(statsRes.success ? (statsRes.data ?? null) : null);
     setLoading(false);
   }
 

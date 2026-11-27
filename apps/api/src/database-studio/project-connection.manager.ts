@@ -1,4 +1,9 @@
-import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  OnModuleDestroy,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool, PoolClient } from 'pg';
 
@@ -8,6 +13,7 @@ export interface ProjectDbCredentials {
   database: string;
   user: string;
   password: string;
+  forceFallback?: boolean;
 }
 
 export interface TenantExecutionContext {
@@ -22,30 +28,42 @@ export interface TenantExecutionContext {
 export class ProjectConnectionManager implements OnModuleDestroy {
   private readonly logger = new Logger(ProjectConnectionManager.name);
   private readonly pools = new Map<string, Pool>();
+  private readonly unreachablePools = new Map<string, number>(); // key -> retryAfter timestamp
   private defaultPool: Pool | null = null;
+  private defaultPoolSsl: boolean | undefined = undefined;
 
   constructor(private readonly config: ConfigService) {
     const mainUrl = this.config.get<string>('DATABASE_URL');
     if (mainUrl) {
       const isSsl = mainUrl.includes('render.com') || mainUrl.includes('sslmode=require');
-      this.defaultPool = new Pool({
-        connectionString: mainUrl,
-        ssl: isSsl ? { rejectUnauthorized: false } : undefined,
-        max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
-      });
-
-      this.defaultPool.on('error', (err) => {
-        this.logger.error(`Default pool error: ${err.message}`);
-      });
+      this.defaultPoolSsl = isSsl;
+      this.defaultPool = this.createDefaultPool(mainUrl, isSsl);
     }
   }
 
-  /**
-   * Get or create a dedicated connection pool for a tenant project database.
-   */
-  getPool(credentials: ProjectDbCredentials): Pool {
+  private createDefaultPool(mainUrl: string, useSsl: boolean): Pool {
+    const pool = new Pool({
+      connectionString: mainUrl,
+      ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+
+    pool.on('error', (err) => {
+      this.logger.error(`Default pool error: ${err.message}`);
+    });
+    return pool;
+  }
+
+  hasFallbackPool(): boolean {
+    return this.defaultPool !== null;
+  }
+
+  private resolveEffectiveEndpoint(credentials: ProjectDbCredentials): {
+    host: string;
+    port: number;
+  } {
     let effectiveHost = credentials.host;
     let effectivePort = credentials.port;
 
@@ -65,6 +83,20 @@ export class ProjectConnectionManager implements OnModuleDestroy {
       }
     }
 
+    return { host: effectiveHost, port: effectivePort };
+  }
+
+  private getPoolKey(credentials: ProjectDbCredentials): string {
+    const { host, port } = this.resolveEffectiveEndpoint(credentials);
+    return `${host}:${port}/${credentials.database}/${credentials.user}`;
+  }
+
+  /**
+   * Get or create a dedicated connection pool for a tenant project database.
+   */
+  getPool(credentials: ProjectDbCredentials): Pool {
+    const { host: effectiveHost, port: effectivePort } =
+      this.resolveEffectiveEndpoint(credentials);
     const key = `${effectiveHost}:${effectivePort}/${credentials.database}/${credentials.user}`;
 
     let pool = this.pools.get(key);
@@ -73,7 +105,7 @@ export class ProjectConnectionManager implements OnModuleDestroy {
       const isSsl =
         effectiveHost.includes('render.com') ||
         dbUrl.includes('sslmode=require') ||
-        dbUrl.includes('render.com');
+        (effectiveHost.includes('.') && dbUrl.includes('render.com'));
 
       pool = new Pool({
         host: effectiveHost,
@@ -82,13 +114,13 @@ export class ProjectConnectionManager implements OnModuleDestroy {
         user: credentials.user,
         password: credentials.password,
         ssl: isSsl ? { rejectUnauthorized: false } : undefined,
-        max: 10,
+        max: 5,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        connectionTimeoutMillis: 4000,
       });
 
       pool.on('error', (err) => {
-        this.logger.error(`Pool error for database ${credentials.database}: ${err.message}`);
+        this.logger.warn(`Pool error for database ${credentials.database}: ${err.message}`);
       });
 
       this.pools.set(key, pool);
@@ -98,20 +130,60 @@ export class ProjectConnectionManager implements OnModuleDestroy {
     return pool;
   }
 
+  private async connectDefaultPool(): Promise<PoolClient> {
+    if (!this.defaultPool) {
+      throw new ServiceUnavailableException('No fallback database pool configured');
+    }
+    try {
+      return await this.defaultPool.connect();
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      const mainUrl = this.config.get<string>('DATABASE_URL');
+      const looksLikeSslMismatch =
+        msg.includes('SSL') ||
+        msg.includes('pg_hba.conf') ||
+        err?.code === 'ECONNRESET';
+
+      if (mainUrl && looksLikeSslMismatch && this.defaultPoolSsl !== undefined) {
+        this.logger.warn(`Retrying defaultPool with inverted SSL setting (${!this.defaultPoolSsl})`);
+        const nextSsl = !this.defaultPoolSsl;
+        await this.defaultPool.end().catch(() => {});
+        this.defaultPoolSsl = nextSsl;
+        this.defaultPool = this.createDefaultPool(mainUrl, nextSsl);
+        return await this.defaultPool.connect();
+      }
+      throw err;
+    }
+  }
+
   /**
    * Acquires a connected client from the project pool, falling back to defaultPool ONLY
-   * if establishing the direct project DB connection fails (e.g. shared cloud hosting).
+   * if establishing the direct project DB connection fails (e.g., on cloud single-DB hosting).
    */
   private async acquireClient(credentials: ProjectDbCredentials): Promise<PoolClient> {
+    if (credentials.forceFallback && this.defaultPool) {
+      return await this.connectDefaultPool();
+    }
+
+    const poolKey = this.getPoolKey(credentials);
+    const retryAfter = this.unreachablePools.get(poolKey);
+    if (retryAfter && Date.now() < retryAfter && this.defaultPool) {
+      return await this.connectDefaultPool();
+    }
+
     const pool = this.getPool(credentials);
     try {
-      return await pool.connect();
+      const client = await pool.connect();
+      this.unreachablePools.delete(poolKey);
+      return client;
     } catch (connErr: any) {
       this.logger.warn(
         `Direct tenant DB connection failed for ${credentials.database} (${connErr.message}). Attempting fallback to main database connection...`,
       );
       if (this.defaultPool) {
-        return await this.defaultPool.connect();
+        // Cache unreachable project DBs for 5 minutes so concurrent/repeated requests don't stall
+        this.unreachablePools.set(poolKey, Date.now() + 5 * 60 * 1000);
+        return await this.connectDefaultPool();
       }
       throw connErr;
     }
@@ -137,9 +209,6 @@ export class ProjectConnectionManager implements OnModuleDestroy {
    * Executes a callback inside an explicit PostgreSQL transaction with
    * transaction-scoped JWT/tenant claims (`set_config(..., true)`) and
    * unprivileged runtime role switching (`SET LOCAL ROLE`).
-   *
-   * Because all context uses `LOCAL` transaction scope, state never leaks
-   * across pooled connections even under high concurrency.
    */
   async withTenantTransaction<T>(
     credentials: ProjectDbCredentials,
@@ -174,8 +243,6 @@ export class ProjectConnectionManager implements OnModuleDestroy {
           ],
         );
 
-        // Drop privileges from DB owner to unprivileged role so PostgreSQL RLS is enforced.
-        // Service role remains on admin/owner connection to allow privileged operations.
         if (context.apiRole !== 'service_role') {
           const safeRef = projectRef.replace(/[^a-zA-Z0-9_]/g, '');
           const candidateRoles =

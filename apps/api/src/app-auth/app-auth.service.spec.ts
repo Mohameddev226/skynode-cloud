@@ -25,6 +25,7 @@ const mockClient = {
 
 const mockConnManager = {
   withClient: jest.fn((_creds: any, fn: (client: any) => Promise<any>) => fn(mockClient)),
+  hasFallbackPool: jest.fn(() => true),
 };
 
 const mockConfig = {
@@ -285,6 +286,17 @@ describe('AppAuthService (Multi-Tenant Auth)', () => {
         confirmedUsers: 10,
         dailyActiveUsers: 3,
       });
+    });
+
+    it('falls back gracefully to shared DB pool when dbPasswordEnc cannot be decrypted', async () => {
+      const { decrypt } = require('../common/utils/crypto.util');
+      (decrypt as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('Unsupported state or unable to authenticate data');
+      });
+      mockConnManager.hasFallbackPool.mockReturnValueOnce(true);
+
+      const resolved = await service.resolveProject('petromanage');
+      expect(resolved.creds.forceFallback).toBe(true);
     });
   });
 });
