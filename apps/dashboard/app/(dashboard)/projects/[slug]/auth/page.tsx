@@ -14,7 +14,11 @@ import {
   Ban,
   Trash2,
   CheckCircle,
+  Building2,
+  KeyRound,
+  ArrowRight,
 } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,6 +35,9 @@ import {
 import { LoadingSkeleton } from '@/components/shared/loading-skeleton';
 import { ErrorState } from '@/components/shared/error-state';
 import { EmptyState } from '@/components/shared/empty-state';
+import { TenantsTab } from '@/components/auth/tenants-tab';
+import { RolesTab } from '@/components/auth/roles-tab';
+import { MultiTenancySettingsCard } from '@/components/auth/multi-tenancy-settings';
 import api from '@/lib/api';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -174,8 +181,8 @@ export default function AuthPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Authentication</h1>
-          <p className="text-sm text-muted-foreground">Manage application users and auth configuration</p>
+          <h1 className="text-2xl font-bold tracking-tight">Authentication & Multi-Tenancy</h1>
+          <p className="text-sm text-muted-foreground">Manage application users, isolated tenant organizations, RBAC roles, and auth configuration</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" onClick={fetchData} title="Refresh">
@@ -226,8 +233,16 @@ export default function AuthPage() {
 
       {/* Tabs */}
       <Tabs defaultValue="users">
-        <TabsList>
+        <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="users">Users</TabsTrigger>
+          <TabsTrigger value="tenants" className="gap-1.5">
+            <Building2 className="h-3.5 w-3.5" />
+            Tenants
+          </TabsTrigger>
+          <TabsTrigger value="roles" className="gap-1.5">
+            <KeyRound className="h-3.5 w-3.5" />
+            Roles &amp; RBAC
+          </TabsTrigger>
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="policies">Policies</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -326,6 +341,14 @@ export default function AuthPage() {
           )}
         </TabsContent>
 
+        <TabsContent value="tenants">
+          <TenantsTab slug={slug} appUsers={users} />
+        </TabsContent>
+
+        <TabsContent value="roles">
+          <RolesTab slug={slug} />
+        </TabsContent>
+
         <TabsContent value="providers">
           <Card>
             <CardHeader>
@@ -355,17 +378,45 @@ export default function AuthPage() {
 
         <TabsContent value="policies">
           <Card>
-            <CardContent className="py-6">
-              <EmptyState
-                icon={Shield}
-                title="Row-level security policies"
-                description="Define who can access what data. Policies can be managed directly via SQL Editor or Database Studio."
-              />
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Shield className="h-4 w-4 text-emerald-500" />
+                Universal Multi-Tenant RLS Helpers
+              </CardTitle>
+              <CardDescription>
+                Use these PostgreSQL helper functions directly in your table RLS policies via Table Editor or SQL Editor.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2 text-xs">
+                {[
+                  { fn: 'auth.uid()', desc: 'Authenticated application user UUID from verified JWT' },
+                  { fn: 'auth.tenant_id()', desc: 'Active tenant UUID verified against auth.tenant_users' },
+                  { fn: 'auth.is_tenant_member()', desc: 'Returns true if user is ACTIVE in the active tenant' },
+                  { fn: "auth.has_permission('table', 'action')", desc: 'Evaluates RBAC role permissions dynamically' },
+                  { fn: "auth.tenant_attribute('key')", desc: 'Reads scoped attribute JSON (e.g. station_id)' },
+                  { fn: 'auth.is_service_role()', desc: 'True when executed with backend service_role privileges' },
+                ].map((item) => (
+                  <div key={item.fn} className="rounded-md border border-border p-3 bg-muted/20">
+                    <code className="font-mono font-semibold text-primary">{item.fn}</code>
+                    <p className="text-muted-foreground mt-1">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="pt-2">
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/projects/${slug}/database`}>
+                    Open Table Editor &amp; Apply RLS Templates
+                    <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="settings">
+        <TabsContent value="settings" className="space-y-4">
+          <MultiTenancySettingsCard slug={slug} />
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Auth settings</CardTitle>
@@ -375,7 +426,7 @@ export default function AuthPage() {
               <div className="flex items-center justify-between py-2 border-b border-border">
                 <div>
                   <p className="text-sm font-medium">Access Token Expiry</p>
-                  <p className="text-xs text-muted-foreground">Default duration for JWT access tokens</p>
+                  <p className="text-xs text-muted-foreground">Default duration for JWT access tokens (includes active tenant claims)</p>
                 </div>
                 <Badge variant="outline">3600s (1 hour)</Badge>
               </div>

@@ -119,14 +119,16 @@ export default function ApiPage() {
     const [keysRes, configRes, tablesRes] = await Promise.all([
       api.get<ApiKey[]>(`/api/v1/projects/${slug}/api/keys`),
       api.get<ProjectApiConfig>(`/api/v1/projects/${slug}/api/config`),
-      api.get<{ tables: TableInfo[] }>(`/api/v1/projects/${slug}/database/tables`),
+      api.get<TableInfo[] | { tables: TableInfo[] }>(`/api/v1/projects/${slug}/database/tables`),
     ]);
     if (!keysRes.success) {
       setError(keysRes.error?.message ?? 'Failed to load API config');
     } else {
       setApiKeys(keysRes.data ?? []);
       setConfig(configRes.data ?? null);
-      setTables(tablesRes.data?.tables ?? []);
+      const rawTables = tablesRes.data;
+      const list = Array.isArray(rawTables) ? rawTables : (rawTables?.tables ?? []);
+      setTables(list.filter((t) => t.schema === 'public'));
     }
     setLoading(false);
   }
@@ -264,17 +266,38 @@ export default function ApiPage() {
           {config && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Quick start</CardTitle>
-                <CardDescription>Fetch data from your REST API</CardDescription>
+                <CardTitle className="text-base">Multi-Tenant SDK Quick Start (@skynode/sdk)</CardTitle>
+                <CardDescription>Authenticate users, switch active tenant organizations, query RLS-isolated tables, and subscribe to tenant-scoped realtime events.</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 <pre className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
-{`// JavaScript / TypeScript
-const res = await fetch(
-  '${config.baseUrl}/rest/v1/${tables[0]?.name ?? 'your_table'}?limit=10',
-  { headers: { 'apikey': '${config.anonKey}' } }
-);
-const { data } = await res.json();`}
+{`import { createClient } from '@skynode/sdk';
+
+const skynode = createClient('${config.baseUrl}', '${config.anonKey}');
+
+// 1. Authenticate user & inspect available tenants
+const { data: session } = await skynode.auth.signIn({
+  email: 'user@company.com',
+  password: 'Password123!',
+});
+
+// 2. Switch active tenant workspace
+await skynode.setTenant('<TENANT_ID_OR_SLUG>');
+
+// 3. Query tenant-isolated rows (enforced via PostgreSQL RLS)
+const { data: rows } = await skynode
+  .from('${tables[0]?.name ?? 'your_table'}')
+  .select('*')
+  .limit(10);
+
+// 4. REST fetch equivalent with verified tenant header
+const res = await fetch('${config.baseUrl}/rest/v1/${tables[0]?.name ?? 'your_table'}?limit=10', {
+  headers: {
+    'apikey': '${config.anonKey}',
+    'Authorization': \`Bearer \${session?.access_token}\`,
+    'X-Tenant-ID': '<TENANT_ID>',
+  },
+});`}
                 </pre>
               </CardContent>
             </Card>

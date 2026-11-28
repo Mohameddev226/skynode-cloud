@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { X, Plus, Shield, ShieldOff, Trash2, Lock, AlertCircle } from 'lucide-react';
+import { X, Plus, Shield, ShieldOff, Trash2, Lock, AlertCircle, Building2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -39,26 +39,28 @@ export function RlsPanel({ isOpen, onClose, projectSlug, tableName, schema = 'pu
   const [pWithCheck, setPWithCheck] = React.useState('');
   const [creating, setCreating] = React.useState(false);
   const [toggling, setToggling] = React.useState(false);
+  const [applyingTemplate, setApplyingTemplate] = React.useState<string | null>(null);
+  const [tenantColumn, setTenantColumn] = React.useState('tenant_id');
 
   const fetchPolicies = React.useCallback(async () => {
     if (!tableName) return;
     setLoading(true);
     setError(null);
-    try {
-      const res = await api.get<any>(
-        `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies?schema=${schema}`
-      );
-      const rawData = res.data;
-      const data: Policy[] = Array.isArray(rawData) ? rawData : (rawData as any)?.data ?? [];
-      setPolicies(data);
-      if (data.length > 0 && data[0]) {
-        setRlsEnabled(Boolean(data[0].rls_enabled));
-      }
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Failed to load policies');
-    } finally {
+    const res = await api.get<any>(
+      `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies?schema=${schema}`
+    );
+    if (!res.success) {
+      setError(res.error?.message ?? 'Failed to load policies');
       setLoading(false);
+      return;
     }
+    const rawData = res.data;
+    const data: Policy[] = Array.isArray(rawData) ? rawData : (rawData as any)?.data ?? [];
+    setPolicies(data);
+    if (data.length > 0 && data[0]) {
+      setRlsEnabled(Boolean(data[0].rls_enabled));
+    }
+    setLoading(false);
   }, [projectSlug, tableName, schema]);
 
   React.useEffect(() => {
@@ -70,18 +72,41 @@ export function RlsPanel({ isOpen, onClose, projectSlug, tableName, schema = 'pu
   async function toggleRls() {
     setToggling(true);
     setError(null);
-    try {
-      await api.post(
-        `/api/v1/projects/${projectSlug}/database/tables/${tableName}/rls?schema=${schema}`,
-        { enabled: !rlsEnabled }
-      );
-      setRlsEnabled((v) => !v);
-      await fetchPolicies();
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Failed to toggle RLS');
-    } finally {
+    const res = await api.post(
+      `/api/v1/projects/${projectSlug}/database/tables/${tableName}/rls?schema=${schema}`,
+      { enabled: !rlsEnabled }
+    );
+    if (!res.success) {
+      setError(res.error?.message ?? 'Failed to toggle RLS');
       setToggling(false);
+      return;
     }
+    setRlsEnabled((v) => !v);
+    await fetchPolicies();
+    setToggling(false);
+  }
+
+  async function applyTemplate(
+    template: 'tenant_isolation' | 'tenant_rbac' | 'public_read_tenant_write' | 'global_read'
+  ) {
+    setApplyingTemplate(template);
+    setError(null);
+    const res = await api.post(
+      `/api/v1/projects/${projectSlug}/database/tables/${tableName}/rls/template?schema=${schema}`,
+      {
+        template,
+        tenantColumn: tenantColumn.trim() || 'tenant_id',
+        resourceName: tableName,
+      }
+    );
+    if (!res.success) {
+      setError(res.error?.message ?? 'Failed to apply multi-tenant RLS template');
+      setApplyingTemplate(null);
+      return;
+    }
+    setRlsEnabled(true);
+    await fetchPolicies();
+    setApplyingTemplate(null);
   }
 
   async function handleCreate() {
@@ -91,38 +116,38 @@ export function RlsPanel({ isOpen, onClose, projectSlug, tableName, schema = 'pu
     }
     setCreating(true);
     setError(null);
-    try {
-      await api.post(
-        `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies?schema=${schema}`,
-        {
-          name: pName.trim(),
-          command: pCmd,
-          using: pUsing.trim() || undefined,
-          withCheck: pWithCheck.trim() || undefined,
-        }
-      );
-      setPName('');
-      setPUsing('');
-      setPWithCheck('');
-      setShowCreate(false);
-      await fetchPolicies();
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Failed to create policy');
-    } finally {
+    const res = await api.post(
+      `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies?schema=${schema}`,
+      {
+        name: pName.trim(),
+        command: pCmd,
+        using: pUsing.trim() || undefined,
+        withCheck: pWithCheck.trim() || undefined,
+      }
+    );
+    if (!res.success) {
+      setError(res.error?.message ?? 'Failed to create policy');
       setCreating(false);
+      return;
     }
+    setPName('');
+    setPUsing('');
+    setPWithCheck('');
+    setShowCreate(false);
+    await fetchPolicies();
+    setCreating(false);
   }
 
   async function handleDrop(name: string) {
     if (!confirm(`Are you sure you want to drop policy "${name}"?`)) return;
-    try {
-      await api.delete(
-        `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies/${encodeURIComponent(name)}?schema=${schema}`
-      );
-      await fetchPolicies();
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Failed to drop policy');
+    const res = await api.delete(
+      `/api/v1/projects/${projectSlug}/database/tables/${tableName}/policies/${encodeURIComponent(name)}?schema=${schema}`
+    );
+    if (!res.success) {
+      setError(res.error?.message ?? 'Failed to drop policy');
+      return;
     }
+    await fetchPolicies();
   }
 
   if (!isOpen) return null;
@@ -192,6 +217,46 @@ export function RlsPanel({ isOpen, onClose, projectSlug, tableName, schema = 'pu
               <span>{error}</span>
             </div>
           )}
+
+          {/* One-Click Multi-Tenant RLS Templates */}
+          <div className="rounded-lg border border-border p-3.5 bg-muted/15 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Building2 className="h-3.5 w-3.5 text-primary" />
+                <span className="text-xs font-semibold">Universal Multi-Tenant RLS Templates</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">Tenant col:</span>
+                <Input
+                  value={tenantColumn}
+                  onChange={(e) => setTenantColumn(e.target.value)}
+                  className="h-6 w-28 text-[11px] font-mono px-2"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {(
+                [
+                  { id: 'tenant_isolation', label: 'Strict Tenant Isolation' },
+                  { id: 'tenant_rbac', label: 'Tenant + RBAC Perms' },
+                  { id: 'public_read_tenant_write', label: 'Public Read / Tenant Write' },
+                  { id: 'global_read', label: 'Authenticated Global Read' },
+                ] as const
+              ).map((tpl) => (
+                <Button
+                  key={tpl.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={applyingTemplate !== null}
+                  onClick={() => applyTemplate(tpl.id)}
+                  className="h-auto py-1.5 px-2.5 text-[11px] justify-start text-left font-normal"
+                >
+                  {applyingTemplate === tpl.id ? 'Applying...' : tpl.label}
+                </Button>
+              ))}
+            </div>
+          </div>
 
           {/* New Policy Form (collapsible) */}
           {showCreate && (
