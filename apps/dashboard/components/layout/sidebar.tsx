@@ -83,7 +83,7 @@ export function Sidebar({ projects = [], currentProject, onCreateProject }: Side
   function isActive(href: string) {
     if (!projectBase) return false;
     const full = projectBase + href;
-    if (href === '') return pathname === projectBase;
+    if (href === '' || href === '/database') return pathname === full;
     return pathname.startsWith(full);
   }
 

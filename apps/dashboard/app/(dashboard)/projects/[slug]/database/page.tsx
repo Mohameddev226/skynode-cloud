@@ -45,6 +45,7 @@ import api from '@/lib/api';
 import { CreateTableModal } from '@/components/database/create-table-modal';
 import { InsertRowModal } from '@/components/database/insert-row-modal';
 import { AddColumnModal } from '@/components/database/add-column-modal';
+import { EditColumnModal, type EditableColumn } from '@/components/database/edit-column-modal';
 import { RlsPanel } from '@/components/database/rls-panel';
 
 /* ─── Types ────────────────────────────────────────────────── */
@@ -147,9 +148,59 @@ export default function TableEditorPage() {
   const [editValue, setEditValue] = React.useState<string>('');
   const [savingCell, setSavingCell] = React.useState(false);
 
-  /* add column & rls */
+  /* add column, edit column, rename table, rls & schemas */
   const [addColumnOpen, setAddColumnOpen] = React.useState(false);
+  const [editingColumnTarget, setEditingColumnTarget] = React.useState<EditableColumn | null>(null);
+  const [renameOpen, setRenameOpen] = React.useState(false);
+  const [renameTargetValue, setRenameTargetValue] = React.useState('');
+  const [renamingTable, setRenamingTable] = React.useState(false);
   const [rlsOpen, setRlsOpen] = React.useState(false);
+  const [schemas, setSchemas] = React.useState<string[]>(['public', 'auth']);
+  const [newSchemaInput, setNewSchemaInput] = React.useState('');
+
+  React.useEffect(() => {
+    api.get<Array<{ name: string }>>(`/api/v1/projects/${slug}/database/schemas`).then((res) => {
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setSchemas(res.data.map((s) => s.name));
+      }
+    });
+  }, [slug]);
+
+  async function handleCreateSchemaQuick(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = newSchemaInput.trim();
+    if (!clean) return;
+    const res = await api.post(`/api/v1/projects/${slug}/database/schemas`, { name: clean });
+    if (!res.success) {
+      alert(res.error?.message ?? 'Failed to create schema');
+      return;
+    }
+    setSchemas((prev) => (prev.includes(clean) ? prev : [...prev, clean]));
+    setNewSchemaInput('');
+    setSchema(clean);
+    setSchemaMenuOpen(false);
+  }
+
+  async function handleRenameTable(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeTable || !renameTargetValue.trim()) return;
+    setRenamingTable(true);
+    const nextName = renameTargetValue.trim();
+    const res = await api.patch(
+      `/api/v1/projects/${slug}/database/tables/${activeTable}?schema=${schema}`,
+      { newName: nextName }
+    );
+    setRenamingTable(false);
+    if (!res.success) {
+      alert(res.error?.message ?? 'Failed to rename table');
+      return;
+    }
+    const prevName = activeTable;
+    setOpenTabs((prev) => prev.map((t) => (t === prevName ? nextName : t)));
+    setActiveTable(nextName);
+    setRenameOpen(false);
+    await loadTables(schema);
+  }
 
   async function handleDropColumn(colName: string) {
     if (!activeTable) return;
@@ -442,7 +493,7 @@ export default function TableEditorPage() {
 
           {schemaMenuOpen && (
             <div className="absolute top-11 left-2 right-2 z-30 rounded-md border border-border bg-popover text-popover-foreground shadow-xl py-1 text-xs">
-              {['public', 'auth'].map((s) => (
+              {schemas.map((s) => (
                 <button
                   key={s}
                   onClick={() => {
@@ -460,6 +511,15 @@ export default function TableEditorPage() {
                   {schema === s && <Check className="h-3 w-3" />}
                 </button>
               ))}
+              <form onSubmit={handleCreateSchemaQuick} className="border-t border-border mt-1 pt-1.5 px-2 pb-1 flex gap-1">
+                <Input
+                  value={newSchemaInput}
+                  onChange={(e) => setNewSchemaInput(e.target.value)}
+                  placeholder="+ new schema"
+                  className="h-6 text-[11px] font-mono px-2"
+                />
+                <Button type="submit" size="sm" variant="secondary" className="h-6 px-2 text-[10px]">Add</Button>
+              </form>
             </div>
           )}
         </div>
@@ -720,6 +780,18 @@ export default function TableEditorPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      onClick={() => {
+                        setRenameTargetValue(activeTable);
+                        setRenameOpen(true);
+                      }}
+                      className="h-7 gap-1.5 text-xs border-border bg-background hover:bg-muted"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      <span>Rename Table</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={copyTableDdl}
                       className="h-7 gap-1.5 text-xs border-border bg-background hover:bg-muted"
                     >
@@ -782,7 +854,14 @@ export default function TableEditorPage() {
                               <span className="text-muted-foreground/40">—</span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-right">
+                          <td className="px-3 py-2 text-right space-x-1">
+                            <button
+                              onClick={() => setEditingColumnTarget(col)}
+                              className="text-muted-foreground hover:text-emerald-500 p-1 rounded hover:bg-emerald-500/10 transition-colors"
+                              title={`Edit column ${col.name}`}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
                             {!col.isPrimary && (
                               <button
                                 onClick={() => handleDropColumn(col.name)}
@@ -1134,6 +1213,47 @@ export default function TableEditorPage() {
           onSuccess={() => { loadTableData(activeTable, page); }}
         />
       )}
+
+      {/* ── Edit Column Modal ──────────────────────────────────── */}
+      {activeTable && (
+        <EditColumnModal
+          isOpen={Boolean(editingColumnTarget)}
+          onClose={() => setEditingColumnTarget(null)}
+          projectSlug={slug}
+          tableName={activeTable}
+          schema={schema}
+          column={editingColumnTarget}
+          onSuccess={() => { loadTableData(activeTable, page); }}
+        />
+      )}
+
+      {/* ── Rename Table Dialog ────────────────────────────────── */}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="max-w-md bg-card text-foreground border-border">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-semibold">Rename Table</DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Rename <span className="font-mono text-foreground">{schema}.{activeTable}</span> to a new table identifier.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleRenameTable} className="space-y-4 py-2">
+            <Input
+              value={renameTargetValue}
+              onChange={(e) => setRenameTargetValue(e.target.value)}
+              className="font-mono text-sm"
+              required
+            />
+            <DialogFooter>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={renamingTable || !renameTargetValue.trim()}>
+                {renamingTable ? 'Renaming...' : 'Rename table'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* ── RLS Policies Panel ───────────────────────────────────── */}
       {activeTable && (

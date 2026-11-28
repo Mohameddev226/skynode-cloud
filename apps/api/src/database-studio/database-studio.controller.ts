@@ -13,8 +13,21 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth } from '@nestjs/swagger';
 import { DatabaseStudioService } from './database-studio.service';
+import { DatabaseAdvancedService } from './database-advanced.service';
 import { ProjectsService } from '../projects/projects.service';
-import { CreateTableDto, SqlQueryDto, TableQueryPaginationDto } from './dto/database-studio.dto';
+import {
+  CreateTableDto,
+  SqlQueryDto,
+  TableQueryPaginationDto,
+  CreateSchemaDto,
+  RenameTableDto,
+  AlterColumnDto,
+  CreateIndexDto,
+  CreateForeignKeyDto,
+  CreateMigrationDto,
+  ToggleExtensionDto,
+  MaintenanceDto,
+} from './dto/database-studio.dto';
 import { AuthGuard } from '../common/guards/auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -25,6 +38,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 export class DatabaseStudioController {
   constructor(
     private readonly studioService: DatabaseStudioService,
+    private readonly advancedService: DatabaseAdvancedService,
     private readonly projectsService: ProjectsService,
   ) {}
 
@@ -270,6 +284,272 @@ export class DatabaseStudioController {
   ) {
     const creds = await this.getCredentials(identifier, userId);
     const result = await this.studioService.applyTenantRlsTemplate(creds, schema, tableName, dto);
+    return { data: result };
+  }
+
+  // ── Phase 5: Schemas, Table/Column Evolution, Indexes, FKs, Migrations, Extensions & Performance ──
+
+  @Get('schemas')
+  @ApiOperation({ summary: 'List database schemas and table counts' })
+  async listSchemas(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const schemas = await this.advancedService.listSchemas(creds);
+    return { data: schemas };
+  }
+
+  @Post('schemas')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a custom database schema' })
+  async createSchema(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Body() dto: CreateSchemaDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const created = await this.advancedService.createSchema(creds, dto.name);
+    return { data: created };
+  }
+
+  @Patch('tables/:tableName')
+  @ApiOperation({ summary: 'Rename an existing table' })
+  async renameTable(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: RenameTableDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const result = await this.advancedService.renameTable(creds, schema, tableName, dto.newName);
+    return { data: result };
+  }
+
+  @Patch('tables/:tableName/columns/:columnName')
+  @ApiOperation({ summary: 'Rename or alter column type, nullability, or default value' })
+  async alterColumn(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Param('columnName') columnName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: AlterColumnDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const result = await this.advancedService.alterColumn(creds, schema, tableName, columnName, dto);
+    return { data: result };
+  }
+
+  @Get('indexes')
+  @ApiOperation({ summary: 'List all database indexes across schemas/tables' })
+  async listAllIndexes(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Query('schema') schema?: string,
+    @Query('table') table?: string,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const indexes = await this.advancedService.listIndexes(creds, schema, table);
+    return { data: indexes };
+  }
+
+  @Get('tables/:tableName/indexes')
+  @ApiOperation({ summary: 'List indexes for a specific table' })
+  async listTableIndexes(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const indexes = await this.advancedService.listIndexes(creds, schema, tableName);
+    return { data: indexes };
+  }
+
+  @Post('tables/:tableName/indexes')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create an index on a table' })
+  async createIndex(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: CreateIndexDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const created = await this.advancedService.createIndex(creds, schema, tableName, dto);
+    return { data: created };
+  }
+
+  @Delete('indexes/:indexName')
+  @ApiOperation({ summary: 'Drop an index' })
+  async dropIndex(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('indexName') indexName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.advancedService.dropIndex(creds, schema, indexName);
+    return { data: { message: `Index ${indexName} dropped` } };
+  }
+
+  @Get('foreign-keys')
+  @ApiOperation({ summary: 'List all foreign key relationships across tables' })
+  async listAllForeignKeys(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Query('schema') schema?: string,
+    @Query('table') table?: string,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const fks = await this.advancedService.listForeignKeys(creds, schema, table);
+    return { data: fks };
+  }
+
+  @Get('tables/:tableName/foreign-keys')
+  @ApiOperation({ summary: 'List foreign keys for a table' })
+  async listTableForeignKeys(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const fks = await this.advancedService.listForeignKeys(creds, schema, tableName);
+    return { data: fks };
+  }
+
+  @Post('tables/:tableName/foreign-keys')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a foreign key relationship to a table' })
+  async createForeignKey(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Query('schema') schema = 'public',
+    @Body() dto: CreateForeignKeyDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const created = await this.advancedService.createForeignKey(creds, schema, tableName, dto);
+    return { data: created };
+  }
+
+  @Delete('tables/:tableName/foreign-keys/:constraintName')
+  @ApiOperation({ summary: 'Drop a foreign key constraint' })
+  async dropForeignKey(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('tableName') tableName: string,
+    @Param('constraintName') constraintName: string,
+    @Query('schema') schema = 'public',
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    await this.advancedService.dropForeignKey(creds, schema, tableName, constraintName);
+    return { data: { message: `Foreign key ${constraintName} dropped` } };
+  }
+
+  @Get('migrations')
+  @ApiOperation({ summary: 'List database migrations' })
+  async listMigrations(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const migrations = await this.advancedService.listMigrations(creds);
+    return { data: migrations };
+  }
+
+  @Post('migrations')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create and optionally apply a database migration' })
+  async createMigration(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Body() dto: CreateMigrationDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const migration = await this.advancedService.createMigration(creds, dto);
+    return { data: migration };
+  }
+
+  @Post('migrations/:migrationId/apply')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Apply a pending or rolled-back migration' })
+  async applyMigration(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('migrationId') migrationId: string,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const migration = await this.advancedService.applyMigration(creds, migrationId);
+    return { data: migration };
+  }
+
+  @Post('migrations/:migrationId/rollback')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rollback an applied migration using its down_sql' })
+  async rollbackMigration(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Param('migrationId') migrationId: string,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const migration = await this.advancedService.rollbackMigration(creds, migrationId);
+    return { data: migration };
+  }
+
+  @Get('extensions')
+  @ApiOperation({ summary: 'List available and installed PostgreSQL extensions' })
+  async listExtensions(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const extensions = await this.advancedService.listExtensions(creds);
+    return { data: extensions };
+  }
+
+  @Post('extensions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Enable or disable a PostgreSQL extension' })
+  async toggleExtension(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Body() dto: ToggleExtensionDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const result = await this.advancedService.toggleExtension(creds, dto.name, dto.enabled);
+    return { data: result };
+  }
+
+  @Get('functions')
+  @ApiOperation({ summary: 'List database functions' })
+  async listFunctions(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const fns = await this.advancedService.listFunctions(creds);
+    return { data: fns };
+  }
+
+  @Get('triggers')
+  @ApiOperation({ summary: 'List database triggers' })
+  async listTriggers(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const triggers = await this.advancedService.listTriggers(creds);
+    return { data: triggers };
+  }
+
+  @Get('performance')
+  @ApiOperation({ summary: 'Get table scan/tuple statistics and slow query performance' })
+  async getPerformance(@CurrentUser('userId') userId: string, @Param('identifier') identifier: string) {
+    const creds = await this.getCredentials(identifier, userId);
+    const stats = await this.advancedService.getPerformanceStats(creds);
+    return { data: stats };
+  }
+
+  @Post('maintenance')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Run VACUUM or ANALYZE on a table or database' })
+  async runMaintenance(
+    @CurrentUser('userId') userId: string,
+    @Param('identifier') identifier: string,
+    @Body() dto: MaintenanceDto,
+  ) {
+    const creds = await this.getCredentials(identifier, userId);
+    const result = await this.advancedService.runMaintenance(creds, dto);
     return { data: result };
   }
 }
