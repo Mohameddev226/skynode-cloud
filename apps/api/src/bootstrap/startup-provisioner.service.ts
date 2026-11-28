@@ -196,10 +196,11 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
           } else {
             await this.ensureRole(superClient, dbUser, false, null);
           }
+          await this.grantRoleToCurrentUser(superClient, dbUser);
           await this.ensureRole(superClient, authRole, false, null);
           await this.ensureRole(superClient, anonRole, false, null);
 
-          // Ensure database
+          // Ensure database (and assign ownership to project admin role)
           const dbExists = await superClient.query(
             'SELECT 1 FROM pg_database WHERE datname = $1',
             [dbName],
@@ -207,6 +208,10 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
           if (dbExists.rowCount === 0) {
             await superClient.query(`CREATE DATABASE "${dbName}" OWNER "${dbUser}"`);
             this.logger.log(`[${name}] Created database: ${dbName}`);
+          } else {
+            await superClient
+              .query(`ALTER DATABASE "${dbName}" OWNER TO "${dbUser}"`)
+              .catch(() => {});
           }
 
           await superClient.query(
@@ -228,6 +233,7 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
               authRole,
               anonRole,
               logger: this.logger,
+              force: true,
             });
           } catch (schemaErr: any) {
             this.logger.warn(`[${name}] Data plane schema upgrade notice: ${schemaErr.message}`);
@@ -252,6 +258,24 @@ export class StartupProvisionerService implements OnApplicationBootstrap {
       if (superClient) {
         await superClient.end().catch(() => {});
       }
+    }
+  }
+
+  private async grantRoleToCurrentUser(client: Client, role: string) {
+    try {
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}')
+             AND current_user <> '${role}' THEN
+            EXECUTE format('GRANT %I TO %I', '${role}', current_user);
+          END IF;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END
+        $$;
+      `);
+    } catch (err: any) {
+      this.logger.debug(`grantRoleToCurrentUser(${role}): ${err.message}`);
     }
   }
 

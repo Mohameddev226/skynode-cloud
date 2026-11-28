@@ -26,8 +26,11 @@ export class DatabaseProvisionerService {
       defaultUrl;
 
     // Connect to maintenance DB
+    const isMainSsl =
+      connectionString.includes('render.com') || connectionString.includes('sslmode=require');
     this.provisionerPool = new Pool({
       connectionString,
+      ssl: isMainSsl ? { rejectUnauthorized: false } : undefined,
       max: 5,
       idleTimeoutMillis: 10000,
     });
@@ -90,13 +93,33 @@ export class DatabaseProvisionerService {
     try {
       client = await this.provisionerPool.connect();
 
-      // 1. Create dedicated database
-      // PostgreSQL doesn't allow parameters in CREATE DATABASE, validate safe alphanumeric
+      // Ensure cluster-level adminRole exists before CREATE DATABASE so it can own the DB
+      await client
+        .query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${adminRole}') THEN
+              CREATE ROLE "${adminRole}" WITH LOGIN PASSWORD '${password}';
+            END IF;
+            BEGIN
+              EXECUTE format('GRANT %I TO %I', '${adminRole}', current_user);
+            EXCEPTION WHEN OTHERS THEN NULL;
+            END;
+          END
+          $$;
+        `)
+        .catch(() => {});
+
+      // 1. Create dedicated database owned by adminRole when permitted
       if (!/^[a-z0-9_]+$/.test(dbName)) {
         throw new InternalServerErrorException('Invalid database name format');
       }
 
-      await client.query(`CREATE DATABASE "${dbName}"`);
+      try {
+        await client.query(`CREATE DATABASE "${dbName}" OWNER "${adminRole}"`);
+      } catch {
+        await client.query(`CREATE DATABASE "${dbName}"`);
+      }
       this.logger.log(`Created database: ${dbName}`);
     } catch (err: any) {
       this.logger.warn(`Could not create dedicated database ${dbName}: ${err.message}. Project will use shared database schema.`);
